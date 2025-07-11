@@ -1,29 +1,41 @@
 CC=gcc
-CFLAGS=-Iinclude -Wall -g
-LDFLAGS=-lm
+CFLAGS=-Iinclude -Wall -g -O3 -fopenmp
+LDFLAGS=-lm -fopenmp
 
 SRC_DIR=src
 OBJ_DIR=obj
 
-SRCS=$(wildcard $(SRC_DIR)/*.c)
-OBJS=$(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+# Source files from src directory
+APP_SRC = $(wildcard $(SRC_DIR)/*.c)
+# main.c is separate
+MAIN_SRC = main.c
+
+# Object files for src files
+APP_OBJ = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(APP_SRC))
+# Object file for main.c
+MAIN_OBJ = $(patsubst %.c, $(OBJ_DIR)/%.o, $(MAIN_SRC))
+
+OBJ = $(APP_OBJ) $(MAIN_OBJ)
 
 TARGET=transformer_test
 
 all: $(TARGET)
 
-$(TARGET): main.o $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) main.o $(OBJS) $(LDFLAGS)
+$(TARGET): $(OBJ)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ) $(LDFLAGS)
 
-main.o: main.c
-	$(CC) $(CFLAGS) -c main.c -o main.o
-
+# Rule for compiling sources in src directory
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Rule for compiling main.c
+$(OBJ_DIR)/main.o: main.c
+	@mkdir -p $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c main.c -o $(OBJ_DIR)/main.o
+
 clean:
-	rm -f $(TARGET) main.o $(OBJ_DIR)/*.o
+	rm -f $(TARGET) $(OBJ_DIR)/*.o
 	rmdir $(OBJ_DIR) || true
 
 .PHONY: all clean 
