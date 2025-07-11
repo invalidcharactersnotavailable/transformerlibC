@@ -277,6 +277,64 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
         int a_cols = a->dims[1];
         int b_cols = b->dims[1];
 
+#if defined(__x86_64__) && defined(__AVX2__)
+        for (int i = 0; i < a_rows; i++) {
+            for (int j = 0; j < b_cols; j++) {
+                float sum = 0.0f;
+                int k = 0;
+                __asm__ __volatile__(
+                    "vxorps %%ymm0, %%ymm0, %%ymm0\n\t" // zero ymm0 (accumulator)
+                    "1:\n\t"
+                    "cmp %[a_cols], %[k]\n\t"
+                    "jge 2f\n\t"
+                    "vmovups (%[a_ptr], %[k], 4), %%ymm1\n\t" // load 8 floats from a
+                    "vbroadcastss (%[b_ptr], %[k], 4), %%ymm2\n\t" // broadcast b[k]
+                    "vfmadd231ps %%ymm1, %%ymm2, %%ymm0\n\t" // acc += a * b
+                    "add $8, %[k]\n\t"
+                    "jmp 1b\n\t"
+                    "2:\n\t"
+                    "vhaddps %%ymm0, %%ymm0, %%ymm0\n\t"
+                    "vhaddps %%ymm0, %%ymm0, %%ymm0\n\t"
+                    "vextractf128 $1, %%ymm0, %%xmm1\n\t"
+                    "vaddps %%xmm0, %%xmm1, %%xmm0\n\t"
+                    "vmovss %%xmm0, %[sum]\n\t"
+                    : [sum] "=m" (sum), [k] "+r" (k)
+                    : [a_ptr] "r" (&a_data[i * a_cols]), [b_ptr] "r" (&b_data[j]), [a_cols] "r" (a_cols)
+                    : "ymm0", "ymm1", "ymm2", "xmm1", "memory"
+                );
+                c_data[i * b_cols + j] = sum;
+            }
+        }
+#elif defined(__x86_64__) && defined(__AVX__)
+        for (int i = 0; i < a_rows; i++) {
+            for (int j = 0; j < b_cols; j++) {
+                float sum = 0.0f;
+                int k = 0;
+                __asm__ __volatile__(
+                    "vxorps %%ymm0, %%ymm0, %%ymm0\n\t" // zero ymm0 (accumulator)
+                    "1:\n\t"
+                    "cmp %[a_cols], %[k]\n\t"
+                    "jge 2f\n\t"
+                    "vmovups (%[a_ptr], %[k], 4), %%ymm1\n\t" // load 8 floats from a
+                    "vbroadcastss (%[b_ptr], %[k], 4), %%ymm2\n\t" // broadcast b[k]
+                    "vmulps %%ymm1, %%ymm2, %%ymm3\n\t" // ymm3 = a * b
+                    "vaddps %%ymm3, %%ymm0, %%ymm0\n\t" // acc += ymm3
+                    "add $8, %[k]\n\t"
+                    "jmp 1b\n\t"
+                    "2:\n\t"
+                    "vhaddps %%ymm0, %%ymm0, %%ymm0\n\t"
+                    "vhaddps %%ymm0, %%ymm0, %%ymm0\n\t"
+                    "vextractf128 $1, %%ymm0, %%xmm1\n\t"
+                    "vaddps %%xmm0, %%xmm1, %%xmm0\n\t"
+                    "vmovss %%xmm0, %[sum]\n\t"
+                    : [sum] "=m" (sum), [k] "+r" (k)
+                    : [a_ptr] "r" (&a_data[i * a_cols]), [b_ptr] "r" (&b_data[j]), [a_cols] "r" (a_cols)
+                    : "ymm0", "ymm1", "ymm2", "ymm3", "xmm1", "memory"
+                );
+                c_data[i * b_cols + j] = sum;
+            }
+        }
+#else
         #pragma omp parallel for
         for (int i = 0; i < a_rows; i++) {
             for (int j = 0; j < b_cols; j++) {
@@ -287,6 +345,7 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
                 c_data[i * b_cols + j] = sum;
             }
         }
+#endif
         return;
     }
     
@@ -397,10 +456,44 @@ void add(Tensor* c, Tensor* a, Tensor* b) {
             assert(c->dims[i] == a->dims[i]);
             total_elements *= a->dims[i];
         }
+#if defined(__x86_64__) && defined(__AVX2__)
+        size_t i = 0;
+        for (; i + 8 <= total_elements; i += 8) {
+            __asm__ __volatile__(
+                "vmovups (%[a]), %%ymm0\n\t"
+                "vmovups (%[b]), %%ymm1\n\t"
+                "vaddps %%ymm1, %%ymm0, %%ymm0\n\t"
+                "vmovups %%ymm0, (%[c])\n\t"
+                :
+                : [a] "r" (a_data + i), [b] "r" (b_data + i), [c] "r" (c_data + i)
+                : "ymm0", "ymm1", "memory"
+            );
+        }
+        for (; i < total_elements; i++) {
+            c_data[i] = a_data[i] + b_data[i];
+        }
+#elif defined(__x86_64__) && defined(__AVX__)
+        size_t i = 0;
+        for (; i + 8 <= total_elements; i += 8) {
+            __asm__ __volatile__(
+                "vmovups (%[a]), %%ymm0\n\t"
+                "vmovups (%[b]), %%ymm1\n\t"
+                "vaddps %%ymm1, %%ymm0, %%ymm0\n\t"
+                "vmovups %%ymm0, (%[c])\n\t"
+                :
+                : [a] "r" (a_data + i), [b] "r" (b_data + i), [c] "r" (c_data + i)
+                : "ymm0", "ymm1", "memory"
+            );
+        }
+        for (; i < total_elements; i++) {
+            c_data[i] = a_data[i] + b_data[i];
+        }
+#else
         #pragma omp parallel for
         for (size_t i = 0; i < total_elements; i++) {
             c_data[i] = a_data[i] + b_data[i];
         }
+#endif
         return;
     }
 
@@ -525,8 +618,42 @@ void scale(Tensor* out, Tensor* in, float scalar) {
     }
     float* in_data = (float*)in->data;
     float* out_data = (float*)out->data;
+#if defined(__x86_64__) && defined(__AVX2__)
+    size_t i = 0;
+    __m256 scalar_vec = _mm256_set1_ps(scalar);
+    for (; i + 8 <= total_elements; i += 8) {
+        __asm__ __volatile__(
+            "vmovups (%[in]), %%ymm0\n\t"
+            "vmulps %[scalar], %%ymm0, %%ymm0\n\t"
+            "vmovups %%ymm0, (%[out])\n\t"
+            :
+            : [in] "r" (in_data + i), [out] "r" (out_data + i), [scalar] "x" (scalar_vec)
+            : "ymm0", "memory"
+        );
+    }
+    for (; i < total_elements; i++) {
+        out_data[i] = in_data[i] * scalar;
+    }
+#elif defined(__x86_64__) && defined(__AVX__)
+    size_t i = 0;
+    __m256 scalar_vec = _mm256_set1_ps(scalar);
+    for (; i + 8 <= total_elements; i += 8) {
+        __asm__ __volatile__(
+            "vmovups (%[in]), %%ymm0\n\t"
+            "vmulps %[scalar], %%ymm0, %%ymm0\n\t"
+            "vmovups %%ymm0, (%[out])\n\t"
+            :
+            : [in] "r" (in_data + i), [out] "r" (out_data + i), [scalar] "x" (scalar_vec)
+            : "ymm0", "memory"
+        );
+    }
+    for (; i < total_elements; i++) {
+        out_data[i] = in_data[i] * scalar;
+    }
+#else
     #pragma omp parallel for
     for (size_t i = 0; i < total_elements; i++) {
         out_data[i] = in_data[i] * scalar;
     }
+#endif
 }
