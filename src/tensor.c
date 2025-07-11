@@ -44,40 +44,45 @@ Tensor* create_tensor(Arena* arena, int n_dims, int* dims, DataType dtype) {
         element_size = sizeof(uint16_t);
     }
 
-    Tensor* t;
+    Tensor* t = NULL;
     if (arena) {
         t = (Tensor*)arena_alloc(arena, sizeof(Tensor));
+        if (!t) { fprintf(stderr, "[ERR] arena_alloc failed for Tensor\n"); return NULL; }
         t->dims = (int*)arena_alloc(arena, n_dims * sizeof(int));
+        if (!t->dims) { fprintf(stderr, "[ERR] arena_alloc failed for dims\n"); return NULL; }
         t->data = arena_alloc(arena, total_elements * element_size);
+        if (!t->data) { fprintf(stderr, "[ERR] arena_alloc failed for data\n"); return NULL; }
         t->grad = arena_alloc(arena, total_elements * element_size);
+        if (!t->grad) { fprintf(stderr, "[ERR] arena_alloc failed for grad\n"); return NULL; }
     } else {
         t = (Tensor*)malloc(sizeof(Tensor));
-        if (!t) return NULL;
+        if (!t) { fprintf(stderr, "[ERR] malloc failed for Tensor\n"); return NULL; }
         t->dims = (int*)malloc(n_dims * sizeof(int));
         if (!t->dims) {
+            fprintf(stderr, "[ERR] malloc failed for dims\n");
             free(t);
             return NULL;
         }
         t->data = calloc(total_elements, element_size);
         if (!t->data) {
+            fprintf(stderr, "[ERR] calloc failed for data\n");
             free(t->dims);
             free(t);
             return NULL;
         }
         t->grad = calloc(total_elements, element_size);
         if (!t->grad) {
+            fprintf(stderr, "[ERR] calloc failed for grad\n");
             free(t->data);
             free(t->dims);
             free(t);
             return NULL;
         }
     }
-    
     if (!t || !t->dims || !t->data || !t->grad) {
-        // This case should be triggered by arena_alloc returning NULL
+        fprintf(stderr, "[ERR] tensor allocation failed\n");
         return NULL;
     }
-
     memset(t->data, 0, total_elements * element_size);
     memset(t->grad, 0, total_elements * element_size);
     t->n_dims = n_dims;
@@ -131,28 +136,29 @@ Tensor* load_tensor(FILE* fp, Arena* arena) {
     int n_dims;
     if (fread(&dtype, sizeof(DataType), 1, fp) != 1) return NULL;
     if (fread(&n_dims, sizeof(int), 1, fp) != 1) return NULL;
-    
     int* dims = (int*)malloc(n_dims * sizeof(int));
+    if (!dims) { fprintf(stderr, "[ERR] malloc failed for dims in load_tensor\n"); return NULL; }
     if (fread(dims, sizeof(int), n_dims, fp) != n_dims) {
+        fprintf(stderr, "[ERR] fread failed for dims in load_tensor\n");
         free(dims);
         return NULL;
     }
-
     Tensor* t = create_tensor(arena, n_dims, dims, dtype);
+    if (!t) {
+        fprintf(stderr, "[ERR] create_tensor failed in load_tensor\n");
+        free(dims);
+        return NULL;
+    }
     free(dims);
-    if (!t) return NULL;
-
     size_t total_elements = 1;
     for (int i = 0; i < t->n_dims; i++) total_elements *= t->dims[i];
-
     size_t element_size = (t->dtype == TENSOR_TYPE_FLOAT) ? sizeof(float) :
                           (t->dtype == TENSOR_TYPE_INT) ? sizeof(int) : sizeof(uint16_t);
-    
     if (fread(t->data, element_size, total_elements, fp) != total_elements) {
+        fprintf(stderr, "[ERR] fread failed for tensor data in load_tensor\n");
         free_tensor(t);
         return NULL;
     }
-
     return t;
 }
 

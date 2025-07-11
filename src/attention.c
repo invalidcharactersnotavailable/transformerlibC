@@ -12,7 +12,7 @@ MultiHeadAttention* create_multihead_attention(int embed_dim, int n_heads) {
     assert(embed_dim % n_heads == 0);
     if (!mha_seeded) { srand((unsigned int)time(NULL)); mha_seeded = 1; }
     MultiHeadAttention* mha = (MultiHeadAttention*)malloc(sizeof(MultiHeadAttention));
-    if (!mha) return NULL;
+    if (!mha) { fprintf(stderr, "[ERR] malloc failed for MultiHeadAttention\n"); return NULL; }
     mha->embed_dim = embed_dim;
     mha->n_heads = n_heads;
     int w_dims[] = {embed_dim, embed_dim};
@@ -21,6 +21,7 @@ MultiHeadAttention* create_multihead_attention(int embed_dim, int n_heads) {
     mha->w_v = create_tensor(2, w_dims, TENSOR_TYPE_FLOAT);
     mha->w_o = create_tensor(2, w_dims, TENSOR_TYPE_FLOAT);
     if (!mha->w_q || !mha->w_k || !mha->w_v || !mha->w_o) {
+        fprintf(stderr, "[ERR] create_tensor failed for attention weights\n");
         free_tensor(mha->w_q); free_tensor(mha->w_k); free_tensor(mha->w_v); free_tensor(mha->w_o); free(mha); return NULL;
     }
     // xavier uniform initialization
@@ -55,11 +56,11 @@ Tensor* split_heads(Arena* arena, Tensor* x, int n_heads) {
     assert(embed_dim % n_heads == 0);
     int reshaped_dims[] = {batch_size, seq_len, n_heads, head_dim};
     Tensor* reshaped = create_tensor(arena, 4, reshaped_dims, TENSOR_TYPE_FLOAT);
-    if (!reshaped) return NULL;
+    if (!reshaped) { fprintf(stderr, "[ERR] create_tensor failed in split_heads (reshaped)\n"); return NULL; }
     memcpy(reshaped->data, x->data, batch_size * seq_len * embed_dim * sizeof(float));
     int transposed_dims[] = {batch_size, n_heads, seq_len, head_dim};
     Tensor* transposed = create_tensor(arena, 4, transposed_dims, TENSOR_TYPE_FLOAT);
-    if (!transposed) { free_tensor(reshaped); return NULL; }
+    if (!transposed) { fprintf(stderr, "[ERR] create_tensor failed in split_heads (transposed)\n"); free_tensor(reshaped); return NULL; }
     transpose(transposed, reshaped, 1, 2);
     free_tensor(reshaped);
     return transposed;
@@ -74,11 +75,11 @@ Tensor* combine_heads(Arena* arena, Tensor* x) {
     int embed_dim = n_heads * head_dim;
     int transposed_dims[] = {batch_size, seq_len, n_heads, head_dim};
     Tensor* transposed = create_tensor(arena, 4, transposed_dims, TENSOR_TYPE_FLOAT);
-    if (!transposed) return NULL;
+    if (!transposed) { fprintf(stderr, "[ERR] create_tensor failed in combine_heads (transposed)\n"); return NULL; }
     transpose(transposed, x, 1, 2);
     int final_dims[] = {batch_size, seq_len, embed_dim};
     Tensor* final_tensor = create_tensor(arena, 3, final_dims, TENSOR_TYPE_FLOAT);
-    if (!final_tensor) { free_tensor(transposed); return NULL; }
+    if (!final_tensor) { fprintf(stderr, "[ERR] create_tensor failed in combine_heads (final_tensor)\n"); free_tensor(transposed); return NULL; }
     memcpy(final_tensor->data, transposed->data, batch_size * seq_len * embed_dim * sizeof(float));
     free_tensor(transposed);
     return final_tensor;

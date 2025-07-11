@@ -7,10 +7,13 @@
 
 LayerNorm* create_layernorm(int embed_dim) {
     LayerNorm* ln = (LayerNorm*)malloc(sizeof(LayerNorm));
+    if (!ln) { fprintf(stderr, "[ERR] malloc failed for LayerNorm\n"); return NULL; }
     ln->embed_dim = embed_dim;
     int dims[] = {embed_dim};
     ln->gamma = create_tensor(1, dims, TENSOR_TYPE_FLOAT);
+    if (!ln->gamma) { fprintf(stderr, "[ERR] create_tensor failed for gamma in LayerNorm\n"); free(ln); return NULL; }
     ln->beta = create_tensor(1, dims, TENSOR_TYPE_FLOAT);
+    if (!ln->beta) { fprintf(stderr, "[ERR] create_tensor failed for beta in LayerNorm\n"); free_tensor(ln->gamma); free(ln); return NULL; }
     for (int i = 0; i < embed_dim; i++) {
         ((float*)ln->gamma->data)[i] = 1.0f;
         ((float*)ln->beta->data)[i] = 0.0f;

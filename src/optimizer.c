@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h> // Added for fprintf
 
 // count params in model
 static size_t count_params(Transformer* model) {
@@ -76,22 +77,23 @@ Optimizer* create_optimizer(Transformer* model, float learning_rate) {
 Optimizer* create_optimizer_with_type(Transformer* model, float learning_rate, int type) {
     if (!model) return NULL;
     Optimizer* opt = (Optimizer*)malloc(sizeof(Optimizer));
-    if (!opt) return NULL;
+    if (!opt) { fprintf(stderr, "[ERR] malloc failed for Optimizer\n"); return NULL; }
     opt->model = model;
     opt->learning_rate = learning_rate;
     size_t n = count_params(model);
     opt->params = (Tensor**)malloc(n * sizeof(Tensor*));
-    if (!opt->params) { free(opt); return NULL; }
+    if (!opt->params) { fprintf(stderr, "[ERR] malloc failed for Optimizer params\n"); free(opt); return NULL; }
     fill_params(model, opt->params);
     opt->num_params = n;
     opt->type = type;
     opt->mixed_precision = 0;
     if (type == OPTIMIZER_ADAM) {
         opt->adam = (struct AdamState*)malloc(sizeof(struct AdamState));
-        if (!opt->adam) { free(opt->params); free(opt); return NULL; }
+        if (!opt->adam) { fprintf(stderr, "[ERR] malloc failed for AdamState\n"); free(opt->params); free(opt); return NULL; }
         opt->adam->m = (float**)malloc(n * sizeof(float*));
         opt->adam->v = (float**)malloc(n * sizeof(float*));
         if (!opt->adam->m || !opt->adam->v) {
+            fprintf(stderr, "[ERR] malloc failed for AdamState m or v\n");
             free(opt->adam->m); free(opt->adam->v); free(opt->adam); free(opt->params); free(opt); return NULL;
         }
         for (size_t i = 0; i < n; i++) {
@@ -100,6 +102,7 @@ Optimizer* create_optimizer_with_type(Transformer* model, float learning_rate, i
             opt->adam->m[i] = (float*)calloc(sz, sizeof(float));
             opt->adam->v[i] = (float*)calloc(sz, sizeof(float));
             if (!opt->adam->m[i] || !opt->adam->v[i]) {
+                fprintf(stderr, "[ERR] calloc failed for AdamState m or v array\n");
                 for (size_t j = 0; j <= i; j++) { free(opt->adam->m[j]); free(opt->adam->v[j]); }
                 free(opt->adam->m); free(opt->adam->v); free(opt->adam); free(opt->params); free(opt); return NULL;
             }

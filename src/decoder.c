@@ -3,17 +3,24 @@
 
 DecoderBlock* create_decoder_block(int embed_dim, int n_heads, int ff_hidden_dim) {
     DecoderBlock* block = (DecoderBlock*)malloc(sizeof(DecoderBlock));
-    if (!block) return NULL;
+    if (!block) { fprintf(stderr, "[ERR] malloc failed for DecoderBlock\n"); return NULL; }
     block->embed_dim = embed_dim;
     block->n_heads = n_heads;
     block->ff_hidden_dim = ff_hidden_dim;
     block->masked_attention = create_multihead_attention(embed_dim, n_heads);
+    if (!block->masked_attention) { fprintf(stderr, "[ERR] create_multihead_attention failed for masked_attention in DecoderBlock\n"); free(block); return NULL; }
     block->cross_attention = create_multihead_attention(embed_dim, n_heads);
+    if (!block->cross_attention) { fprintf(stderr, "[ERR] create_multihead_attention failed for cross_attention in DecoderBlock\n"); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     block->ff = create_feedforward(embed_dim, ff_hidden_dim);
+    if (!block->ff) { fprintf(stderr, "[ERR] create_feedforward failed in DecoderBlock\n"); free_multihead_attention(block->cross_attention); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     block->ln1 = create_layernorm(embed_dim);
+    if (!block->ln1) { fprintf(stderr, "[ERR] create_layernorm failed for ln1 in DecoderBlock\n"); free_feedforward(block->ff); free_multihead_attention(block->cross_attention); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     block->ln2 = create_layernorm(embed_dim);
+    if (!block->ln2) { fprintf(stderr, "[ERR] create_layernorm failed for ln2 in DecoderBlock\n"); free_layernorm(block->ln1); free_feedforward(block->ff); free_multihead_attention(block->cross_attention); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     block->ln3 = create_layernorm(embed_dim);
+    if (!block->ln3) { fprintf(stderr, "[ERR] create_layernorm failed for ln3 in DecoderBlock\n"); free_layernorm(block->ln2); free_layernorm(block->ln1); free_feedforward(block->ff); free_multihead_attention(block->cross_attention); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     block->dropout = create_dropout(0.1);
+    if (!block->dropout) { fprintf(stderr, "[ERR] create_dropout failed in DecoderBlock\n"); free_layernorm(block->ln3); free_layernorm(block->ln2); free_layernorm(block->ln1); free_feedforward(block->ff); free_multihead_attention(block->cross_attention); free_multihead_attention(block->masked_attention); free(block); return NULL; }
     return block;
 }
 

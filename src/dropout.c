@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <time.h>
 #include <string.h>
+#include <stdio.h> // Added for fprintf
 
 // global random seed flag
 static int dropout_seeded = 0;
@@ -14,7 +15,7 @@ Dropout* create_dropout(float rate) {
         dropout_seeded = 1;
     }
     Dropout* d = (Dropout*)malloc(sizeof(Dropout));
-    if (!d) return NULL;
+    if (!d) { fprintf(stderr, "[ERR] malloc failed for Dropout\n"); return NULL; }
     d->rate = rate;
     return d;
 }

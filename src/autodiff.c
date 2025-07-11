@@ -12,16 +12,20 @@ Value* create_value(Arena* arena, Tensor* data, Value** prev, int n_prev, void* 
     Value* v;
     if (arena) {
         v = (Value*)arena_alloc(arena, sizeof(Value));
+        if (!v) { fprintf(stderr, "[ERR] arena_alloc failed for Value\n"); return NULL; }
         v->prev = n_prev > 0 ? (Value**)arena_alloc(arena, n_prev * sizeof(Value*)) : NULL;
+        if (n_prev > 0 && !v->prev) { fprintf(stderr, "[ERR] arena_alloc failed for Value prev\n"); return NULL; }
     } else {
         v = (Value*)malloc(sizeof(Value));
+        if (!v) { fprintf(stderr, "[ERR] malloc failed for Value\n"); return NULL; }
         v->prev = n_prev > 0 ? (Value**)malloc(n_prev * sizeof(Value*)) : NULL;
+        if (n_prev > 0 && !v->prev) { fprintf(stderr, "[ERR] malloc failed for Value prev\n"); free(v); return NULL; }
     }
     
     v->data = data;
     v->grad = NULL;
     v->n_prev = n_prev;
-    if (prev) {
+    if (prev && v->prev) {
         memcpy(v->prev, prev, n_prev * sizeof(Value*));
     }
     v->_backward = _backward;

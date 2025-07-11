@@ -3,15 +3,20 @@
 
 EncoderBlock* create_encoder_block(int embed_dim, int n_heads, int ff_hidden_dim) {
     EncoderBlock* block = (EncoderBlock*)malloc(sizeof(EncoderBlock));
-    if (!block) return NULL;
+    if (!block) { fprintf(stderr, "[ERR] malloc failed for EncoderBlock\n"); return NULL; }
     block->embed_dim = embed_dim;
     block->n_heads = n_heads;
     block->ff_hidden_dim = ff_hidden_dim;
     block->attention = create_multihead_attention(embed_dim, n_heads);
+    if (!block->attention) { fprintf(stderr, "[ERR] create_multihead_attention failed in EncoderBlock\n"); free(block); return NULL; }
     block->ff = create_feedforward(embed_dim, ff_hidden_dim);
+    if (!block->ff) { fprintf(stderr, "[ERR] create_feedforward failed in EncoderBlock\n"); free_multihead_attention(block->attention); free(block); return NULL; }
     block->ln1 = create_layernorm(embed_dim);
+    if (!block->ln1) { fprintf(stderr, "[ERR] create_layernorm failed for ln1 in EncoderBlock\n"); free_feedforward(block->ff); free_multihead_attention(block->attention); free(block); return NULL; }
     block->ln2 = create_layernorm(embed_dim);
+    if (!block->ln2) { fprintf(stderr, "[ERR] create_layernorm failed for ln2 in EncoderBlock\n"); free_layernorm(block->ln1); free_feedforward(block->ff); free_multihead_attention(block->attention); free(block); return NULL; }
     block->dropout = create_dropout(0.1); // Default 0.1 dropout rate
+    if (!block->dropout) { fprintf(stderr, "[ERR] create_dropout failed in EncoderBlock\n"); free_layernorm(block->ln2); free_layernorm(block->ln1); free_feedforward(block->ff); free_multihead_attention(block->attention); free(block); return NULL; }
     return block;
 }
 

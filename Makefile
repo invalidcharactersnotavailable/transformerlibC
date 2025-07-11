@@ -1,8 +1,8 @@
 CC=gcc
-CFLAGS=-Iinclude -Wall -g -O3 -fopenmp
+CFLAGS=-Iinclude -Wall -Wextra -Werror -g -O3 -fopenmp
 LDFLAGS=-lm -fopenmp
 
-# To use CBLAS, run: make USE_CBLAS=1
+# to use CBLAS, run: make USE_CBLAS=1
 ifeq ($(USE_CBLAS), 1)
     CFLAGS += -DUSE_CBLAS
     LDFLAGS += -lcblas
@@ -11,7 +11,7 @@ endif
 SRC_DIR=src
 OBJ_DIR=obj
 
-# Source files from src directory
+# source files from src directory
 APP_SRC = $(wildcard $(SRC_DIR)/*.c)
 # main.c is separate
 MAIN_SRC = main.c
@@ -39,6 +39,11 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 $(OBJ_DIR)/main.o: main.c
 	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c main.c -o $(OBJ_DIR)/main.o
+
+release: CFLAGS=-Iinclude -Wall -Wextra -Werror -O3 -DNDEBUG -fopenmp
+release: LDFLAGS=-lm -fopenmp
+release: $(OBJ)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ) $(LDFLAGS)
 
 clean:
 	rm -f $(TARGET) $(OBJ_DIR)/*.o

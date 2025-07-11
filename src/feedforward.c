@@ -5,14 +5,19 @@
 
 FeedForward* create_feedforward(int embed_dim, int hidden_dim) {
     FeedForward* ff = (FeedForward*)malloc(sizeof(FeedForward));
+    if (!ff) { fprintf(stderr, "[ERR] malloc failed for FeedForward\n"); return NULL; }
     int w1_dims[] = {embed_dim, hidden_dim};
     int b1_dims[] = {hidden_dim};
     int w2_dims[] = {hidden_dim, embed_dim};
     int b2_dims[] = {embed_dim};
     ff->w1 = create_tensor(2, w1_dims, TENSOR_TYPE_FLOAT);
+    if (!ff->w1) { fprintf(stderr, "[ERR] create_tensor failed for w1 in FeedForward\n"); free(ff); return NULL; }
     ff->b1 = create_tensor(1, b1_dims, TENSOR_TYPE_FLOAT);
+    if (!ff->b1) { fprintf(stderr, "[ERR] create_tensor failed for b1 in FeedForward\n"); free_tensor(ff->w1); free(ff); return NULL; }
     ff->w2 = create_tensor(2, w2_dims, TENSOR_TYPE_FLOAT);
+    if (!ff->w2) { fprintf(stderr, "[ERR] create_tensor failed for w2 in FeedForward\n"); free_tensor(ff->b1); free_tensor(ff->w1); free(ff); return NULL; }
     ff->b2 = create_tensor(1, b2_dims, TENSOR_TYPE_FLOAT);
+    if (!ff->b2) { fprintf(stderr, "[ERR] create_tensor failed for b2 in FeedForward\n"); free_tensor(ff->w2); free_tensor(ff->b1); free_tensor(ff->w1); free(ff); return NULL; }
     return ff;
 }
 

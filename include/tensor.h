@@ -27,14 +27,43 @@ typedef struct {
     // Arena* arena; // removed, all memory is dynamic
 } Tensor;
 
+/**
+ * create_tensor - allocate a tensor with the given shape and type
+ * @arena: optional arena for allocation, or NULL for dynamic
+ * @n_dims: number of dimensions
+ * @dims: array of dimension sizes
+ * @dtype: data type
+ * returns: pointer to tensor or NULL on failure
+ */
 Tensor* create_tensor(Arena* arena, int n_dims, int* dims, DataType dtype);
+
+/**
+ * free_tensor - free a tensor allocated with create_tensor
+ * @t: tensor to free
+ */
 void free_tensor(Tensor *t);
 
-// Tensor utility functions
+/**
+ * create_look_ahead_mask - fill a tensor with a look-ahead mask for seq2seq
+ * @mask: tensor to fill (must be correct shape)
+ * @seq_len: sequence length
+ */
 void create_look_ahead_mask(Tensor* mask, int seq_len);
 
-// I/O functions
+/**
+ * save_tensor - write tensor to file
+ * @t: tensor to save
+ * @fp: file pointer
+ * returns: 1 on success, 0 on failure
+ */
 int save_tensor(Tensor* t, FILE* fp);
+
+/**
+ * load_tensor - read tensor from file
+ * @fp: file pointer
+ * @arena: optional arena for allocation, or NULL for dynamic
+ * returns: pointer to tensor or NULL on failure
+ */
 Tensor* load_tensor(FILE* fp, Arena* arena);
 
 // Tensor operations (in-place and out-of-place versions)
