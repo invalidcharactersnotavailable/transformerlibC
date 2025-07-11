@@ -11,9 +11,11 @@ typedef struct {
 
 MultiHeadAttention* create_multihead_attention(int embed_dim, int n_heads);
 void free_multihead_attention(MultiHeadAttention* mha);
-void multihead_attention_forward(Tensor* out, Tensor* in, MultiHeadAttention* mha, Tensor* mask, Arena* arena);
-Value* multihead_attention_forward_ad(Value* in, MultiHeadAttention* mha, Tensor* mask, Arena* arena);
-Tensor* split_heads(Tensor* x, int n_heads);
-Tensor* combine_heads(Tensor* x);
+void multihead_attention_forward(Tensor* out, Tensor* q_in, Tensor* k_in, Tensor* v_in, MultiHeadAttention* mha, Tensor* mask);
+Value* multihead_attention_forward_ad(Arena* arena, Value* q_in, Value* k_in, Value* v_in, MultiHeadAttention* mha, Tensor* mask);
+int save_multihead_attention(MultiHeadAttention* mha, FILE* fp);
+int load_multihead_attention(MultiHeadAttention* mha, FILE* fp);
+Tensor* split_heads(Arena* arena, Tensor* x, int n_heads);
+Tensor* combine_heads(Arena* arena, Tensor* x);
 
 #endif // ATTENTION_H

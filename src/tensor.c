@@ -5,8 +5,31 @@
 #include <stdio.h>
 #include <assert.h>
 #include "memory.h"
+#include <stdint.h>
 
-Tensor* create_tensor(int n_dims, int* dims, DataType dtype, Arena* arena) {
+// float16 conversion helpers
+uint16_t float32_to_float16(float f) {
+    uint32_t x = *(uint32_t*)&f;
+    uint16_t sign = (x >> 16) & 0x8000;
+    uint32_t mantissa = x & 0x7fffff;
+    int exp = ((x >> 23) & 0xff) - 127 + 15;
+    if (exp <= 0) return sign;
+    if (exp >= 31) return sign | 0x7c00;
+    return sign | (exp << 10) | (mantissa >> 13);
+}
+float float16_to_float32(uint16_t h) {
+    uint32_t sign = (h & 0x8000) << 16;
+    int exp = (h >> 10) & 0x1f;
+    uint32_t mantissa = (h & 0x3ff) << 13;
+    if (exp == 0) exp = 127 - 15 + 1;
+    else exp = exp - 15 + 127;
+    uint32_t x = sign | (exp << 23) | mantissa;
+    float f;
+    memcpy(&f, &x, sizeof(float));
+    return f;
+}
+
+Tensor* create_tensor(Arena* arena, int n_dims, int* dims, DataType dtype) {
     size_t total_elements = 1;
     for (int i = 0; i < n_dims; i++) {
         total_elements *= dims[i];
@@ -17,17 +40,16 @@ Tensor* create_tensor(int n_dims, int* dims, DataType dtype, Arena* arena) {
         element_size = sizeof(float);
     } else if (dtype == TENSOR_TYPE_INT) {
         element_size = sizeof(int);
+    } else if (dtype == TENSOR_TYPE_FLOAT16) {
+        element_size = sizeof(uint16_t);
     }
 
     Tensor* t;
     if (arena) {
         t = (Tensor*)arena_alloc(arena, sizeof(Tensor));
-        if (!t) return NULL;
         t->dims = (int*)arena_alloc(arena, n_dims * sizeof(int));
-        if (!t->dims) return NULL; // Arena will be reset, so no need to free
         t->data = arena_alloc(arena, total_elements * element_size);
-        if (!t->data) return NULL;
-        memset(t->data, 0, total_elements * element_size); // calloc behavior
+        t->grad = arena_alloc(arena, total_elements * element_size);
     } else {
         t = (Tensor*)malloc(sizeof(Tensor));
         if (!t) return NULL;
@@ -42,13 +64,26 @@ Tensor* create_tensor(int n_dims, int* dims, DataType dtype, Arena* arena) {
             free(t);
             return NULL;
         }
+        t->grad = calloc(total_elements, element_size);
+        if (!t->grad) {
+            free(t->data);
+            free(t->dims);
+            free(t);
+            return NULL;
+        }
+    }
+    
+    if (!t || !t->dims || !t->data || !t->grad) {
+        // This case should be triggered by arena_alloc returning NULL
+        return NULL;
     }
 
+    memset(t->data, 0, total_elements * element_size);
+    memset(t->grad, 0, total_elements * element_size);
     t->n_dims = n_dims;
     memcpy(t->dims, dims, n_dims * sizeof(int));
     t->dtype = dtype;
     t->arena = arena;
-    
     return t;
 }
 
@@ -56,11 +91,73 @@ void free_tensor(Tensor* t) {
     if (t && t->arena == NULL) {
         if (t->dims) free(t->dims);
         if (t->data) free(t->data);
+        if (t->grad) free(t->grad);
         free(t);
     }
 }
 
-#ifdef USE_BLAS
+void create_look_ahead_mask(Tensor* mask, int seq_len) {
+    assert(mask->n_dims == 2 && mask->dims[0] == seq_len && mask->dims[1] == seq_len);
+    assert(mask->dtype == TENSOR_TYPE_FLOAT);
+    float* mask_data = (float*)mask->data;
+    for (int i = 0; i < seq_len; i++) {
+        for (int j = 0; j < seq_len; j++) {
+            if (j > i) {
+                mask_data[i * seq_len + j] = -1e9; // Large negative number
+            } else {
+                mask_data[i * seq_len + j] = 0.0f;
+            }
+        }
+    }
+}
+
+int save_tensor(Tensor* t, FILE* fp) {
+    if (fwrite(&t->dtype, sizeof(DataType), 1, fp) != 1) return 0;
+    if (fwrite(&t->n_dims, sizeof(int), 1, fp) != 1) return 0;
+    if (fwrite(t->dims, sizeof(int), t->n_dims, fp) != t->n_dims) return 0;
+
+    size_t total_elements = 1;
+    for (int i = 0; i < t->n_dims; i++) total_elements *= t->dims[i];
+    
+    size_t element_size = (t->dtype == TENSOR_TYPE_FLOAT) ? sizeof(float) :
+                          (t->dtype == TENSOR_TYPE_INT) ? sizeof(int) : sizeof(uint16_t);
+
+    if (fwrite(t->data, element_size, total_elements, fp) != total_elements) return 0;
+
+    return 1;
+}
+
+Tensor* load_tensor(FILE* fp, Arena* arena) {
+    DataType dtype;
+    int n_dims;
+    if (fread(&dtype, sizeof(DataType), 1, fp) != 1) return NULL;
+    if (fread(&n_dims, sizeof(int), 1, fp) != 1) return NULL;
+    
+    int* dims = (int*)malloc(n_dims * sizeof(int));
+    if (fread(dims, sizeof(int), n_dims, fp) != n_dims) {
+        free(dims);
+        return NULL;
+    }
+
+    Tensor* t = create_tensor(arena, n_dims, dims, dtype);
+    free(dims);
+    if (!t) return NULL;
+
+    size_t total_elements = 1;
+    for (int i = 0; i < t->n_dims; i++) total_elements *= t->dims[i];
+
+    size_t element_size = (t->dtype == TENSOR_TYPE_FLOAT) ? sizeof(float) :
+                          (t->dtype == TENSOR_TYPE_INT) ? sizeof(int) : sizeof(uint16_t);
+    
+    if (fread(t->data, element_size, total_elements, fp) != total_elements) {
+        free_tensor(t);
+        return NULL;
+    }
+
+    return t;
+}
+
+#ifdef USE_CBLAS
 void matmul(Tensor* c, Tensor* a, Tensor* b) {
     assert(a->dtype == TENSOR_TYPE_FLOAT);
     assert(b->dtype == TENSOR_TYPE_FLOAT);
@@ -175,6 +272,7 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
         int a_cols = a->dims[1];
         int b_cols = b->dims[1];
 
+        #pragma omp parallel for
         for (int i = 0; i < a_rows; i++) {
             for (int j = 0; j < b_cols; j++) {
                 float sum = 0.0f;
@@ -196,6 +294,7 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
         assert(E == b->dims[0]);
         assert(c->n_dims == 3 && c->dims[0] == B && c->dims[1] == S && c->dims[2] == F);
 
+        #pragma omp parallel for collapse(2)
         for (int b_idx = 0; b_idx < B; b_idx++) {
             for (int s_idx = 0; s_idx < S; s_idx++) {
                 for (int f_idx = 0; f_idx < F; f_idx++) {
@@ -220,6 +319,7 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
         assert(B == b->dims[0] && H == b->dims[1] && D == b->dims[2]);
         assert(c->n_dims == 4 && c->dims[0] == B && c->dims[1] == H && c->dims[2] == S && c->dims[3] == S_prime);
 
+        #pragma omp parallel for collapse(3)
         for (int b_idx = 0; b_idx < B; b_idx++) {
             for (int h_idx = 0; h_idx < H; h_idx++) {
                 for (int s_idx = 0; s_idx < S; s_idx++) {
@@ -246,6 +346,7 @@ void matmul(Tensor* c, Tensor* a, Tensor* b) {
         assert(B == b->dims[0] && E == b->dims[1]);
         assert(c->n_dims == 3 && c->dims[0] == B && c->dims[1] == S && c->dims[2] == T);
 
+        #pragma omp parallel for collapse(2)
         for (int b_idx = 0; b_idx < B; b_idx++) {
             for (int s_idx = 0; s_idx < S; s_idx++) {
                 for (int t_idx = 0; t_idx < T; t_idx++) {
@@ -291,6 +392,7 @@ void add(Tensor* c, Tensor* a, Tensor* b) {
             assert(c->dims[i] == a->dims[i]);
             total_elements *= a->dims[i];
         }
+        #pragma omp parallel for
         for (size_t i = 0; i < total_elements; i++) {
             c_data[i] = a_data[i] + b_data[i];
         }
@@ -312,6 +414,7 @@ void add(Tensor* c, Tensor* a, Tensor* b) {
         outer_size *= a->dims[i];
     }
     
+    #pragma omp parallel for
     for (size_t i = 0; i < outer_size; i++) {
         for (int j = 0; j < b_last_dim; j++) {
             c_data[i * b_last_dim + j] = a_data[i * b_last_dim + j] + b_data[j];
@@ -330,6 +433,7 @@ void softmax(Tensor* t) {
         outer_size *= t->dims[i];
     }
 
+    #pragma omp parallel for
     for (size_t i = 0; i < outer_size; i++) {
         float* row = t_data + i * last_dim;
 
@@ -439,6 +543,7 @@ void scale(Tensor* out, Tensor* in, float scalar) {
     }
     float* in_data = (float*)in->data;
     float* out_data = (float*)out->data;
+    #pragma omp parallel for
     for (size_t i = 0; i < total_elements; i++) {
         out_data[i] = in_data[i] * scalar;
     }

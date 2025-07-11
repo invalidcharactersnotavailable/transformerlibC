@@ -22,7 +22,9 @@ typedef struct {
 
 EncoderBlock* create_encoder_block(int embed_dim, int n_heads, int ff_hidden_dim);
 void free_encoder_block(EncoderBlock* block);
-void encoder_block_forward(Tensor* out, Tensor* in, EncoderBlock* block, Arena* arena, int training);
-Value* encoder_block_forward_ad(Value* in, EncoderBlock* block, Arena* arena, int training);
+void encoder_block_forward(Tensor* out, Tensor* in, EncoderBlock* block, int training);
+Value* encoder_block_forward_ad(Arena* arena, Value* in, EncoderBlock* block, int training);
+int save_encoder_block(EncoderBlock* block, FILE* fp);
+int load_encoder_block(EncoderBlock* block, FILE* fp);
 
 #endif // ENCODER_H

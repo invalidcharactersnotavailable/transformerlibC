@@ -30,7 +30,7 @@ Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, i
     t->embedding = create_token_embedding(vocab_size, embed_dim);
 
     int pos_dims[] = {max_seq_len, embed_dim};
-    t->pos_encoding = create_tensor(2, pos_dims, TENSOR_TYPE_FLOAT, NULL);
+    t->pos_encoding = create_tensor(NULL, 2, pos_dims, TENSOR_TYPE_FLOAT);
     create_positional_encoding(t->pos_encoding, max_seq_len, embed_dim);
 
     t->encoder_layers = (EncoderBlock**)malloc(n_layers * sizeof(EncoderBlock*));
@@ -41,7 +41,11 @@ Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, i
     }
     
     int out_dims[] = {embed_dim, vocab_size};
-    t->output_layer = create_tensor(2, out_dims, TENSOR_TYPE_FLOAT, NULL);
+    t->output_layer = create_tensor(NULL, 2, out_dims, TENSOR_TYPE_FLOAT);
+
+    int mask_dims[] = {max_seq_len, max_seq_len};
+    t->look_ahead_mask = create_tensor(NULL, 2, mask_dims, TENSOR_TYPE_FLOAT);
+    create_look_ahead_mask(t->look_ahead_mask, max_seq_len);
 
     return t;
 }
@@ -56,56 +60,59 @@ void free_transformer(Transformer* t) {
     free(t->encoder_layers);
     free(t->decoder_layers);
     free_tensor(t->output_layer);
+    free_tensor(t->look_ahead_mask);
     free(t);
 }
 
-void transformer_forward(Tensor* out, Tensor* src_in, Tensor* tgt_in, Transformer* t, Arena* arena, int training) {
+void transformer_forward(Tensor* out, Tensor* src_in, Tensor* tgt_in, Transformer* t, int training) {
     // Encoder forward pass
-    Tensor* encoder_out = create_tensor(src_in->n_dims, src_in->dims, TENSOR_TYPE_FLOAT, arena);
+    Tensor* encoder_out = create_tensor(src_in->n_dims, src_in->dims, TENSOR_TYPE_FLOAT);
     // Note: This is a simplified forward pass for the encoder
     // A proper implementation would handle embeddings and sequential layer processing
-    encoder_block_forward(encoder_out, src_in, t->encoder_layers[0], arena, training);
+    encoder_block_forward(encoder_out, src_in, t->encoder_layers[0], training);
     for (int i = 1; i < t->n_layers; i++) {
-        encoder_block_forward(encoder_out, encoder_out, t->encoder_layers[i], arena, training);
+        encoder_block_forward(encoder_out, encoder_out, t->encoder_layers[i], training);
     }
 
     // Decoder forward pass
-    Tensor* decoder_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT, arena);
+    Tensor* decoder_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     // Note: Simplified forward pass for the decoder
-    decoder_block_forward(decoder_out, tgt_in, encoder_out, t->decoder_layers[0], arena, training);
+    decoder_block_forward(decoder_out, tgt_in, encoder_out, t->decoder_layers[0], training);
     for (int i = 1; i < t->n_layers; i++) {
-        decoder_block_forward(decoder_out, decoder_out, encoder_out, t->decoder_layers[i], arena, training);
+        decoder_block_forward(decoder_out, decoder_out, encoder_out, t->decoder_layers[i], training);
     }
     
     // Final output layer
     matmul(out, decoder_out, t->output_layer);
+    free_tensor(encoder_out);
+    free_tensor(decoder_out);
 }
 
-Value* transformer_forward_ad(Tensor* src, Tensor* tgt, Transformer* model, Arena* arena, int is_training) {
+Value* transformer_forward_ad(Arena* arena, Tensor* src, Tensor* tgt, Transformer* model, int is_training) {
     // Note: Embeddings and positional encoding are not part of the graph for now.
-    Tensor* src_embedded = create_tensor(src->n_dims, src->dims, TENSOR_TYPE_FLOAT, arena);
+    Tensor* src_embedded = create_tensor(arena, src->n_dims, src->dims, TENSOR_TYPE_FLOAT);
     token_embedding_forward(src_embedded, src, model->embedding);
     // TODO: Positional encoding should be part of the graph if it's learned
     add(src_embedded, src_embedded, model->pos_encoding);
-    Value* encoder_in_val = create_value(src_embedded, NULL, 0, NULL, arena, NULL);
+    Value* encoder_in_val = create_value(arena, src_embedded, NULL, 0, NULL, NULL);
 
     Value* encoder_out_val = encoder_in_val;
     for (int i = 0; i < model->n_layers; i++) {
-        encoder_out_val = encoder_block_forward_ad(encoder_out_val, model->encoder_layers[i], arena, is_training);
+        encoder_out_val = encoder_block_forward_ad(arena, encoder_out_val, model->encoder_layers[i], is_training);
     }
 
-    Tensor* tgt_embedded = create_tensor(tgt->n_dims, tgt->dims, TENSOR_TYPE_FLOAT, arena);
+    Tensor* tgt_embedded = create_tensor(arena, tgt->n_dims, tgt->dims, TENSOR_TYPE_FLOAT);
     token_embedding_forward(tgt_embedded, tgt, model->embedding);
     add(tgt_embedded, tgt_embedded, model->pos_encoding);
-    Value* decoder_in_val = create_value(tgt_embedded, NULL, 0, NULL, arena, NULL);
+    Value* decoder_in_val = create_value(arena, tgt_embedded, NULL, 0, NULL, NULL);
 
     Value* decoder_out_val = decoder_in_val;
     for (int i = 0; i < model->n_layers; i++) {
-        decoder_out_val = decoder_block_forward_ad(decoder_out_val, encoder_out_val, model->decoder_layers[i], arena, is_training);
+        decoder_out_val = decoder_block_forward_ad(arena, decoder_out_val, encoder_out_val, model->decoder_layers[i], is_training, model->look_ahead_mask);
     }
 
-    Value* out_layer_val = create_value(model->output_layer, NULL, 0, NULL, arena, NULL);
-    Value* logits = matmul_ad(decoder_out_val, out_layer_val, arena);
+    Value* out_layer_val = create_value(arena, model->output_layer, NULL, 0, NULL, NULL);
+    Value* logits = matmul_ad(arena, decoder_out_val, out_layer_val);
 
     return logits;
 }
@@ -113,22 +120,43 @@ Value* transformer_forward_ad(Tensor* src, Tensor* tgt, Transformer* model, Aren
 int save_transformer(Transformer* t, const char* path) {
     FILE* fp = fopen(path, "wb");
     if (!fp) return 0;
+
+    int success = 1;
+    if (!save_token_embedding(t->embedding, fp)) success = 0;
     
-    // Simplified: only saving the output layer for now.
-    // A full implementation would iterate over all parameters.
-    fwrite(t->output_layer->data, sizeof(float), t->output_layer->dims[0] * t->output_layer->dims[1], fp);
+    for (int i = 0; i < t->n_layers && success; i++) {
+        if (!save_encoder_block(t->encoder_layers[i], fp)) success = 0;
+    }
+    for (int i = 0; i < t->n_layers && success; i++) {
+        if (!save_decoder_block(t->decoder_layers[i], fp)) success = 0;
+    }
+
+    if (success && !save_tensor(t->output_layer, fp)) success = 0;
 
     fclose(fp);
-    return 1;
+    return success;
 }
 
 int load_transformer(Transformer* t, const char* path) {
     FILE* fp = fopen(path, "rb");
     if (!fp) return 0;
 
-    // Simplified: only loading the output layer for now.
-    fread(t->output_layer->data, sizeof(float), t->output_layer->dims[0] * t->output_layer->dims[1], fp);
+    int success = 1;
+    if (!load_token_embedding(t->embedding, fp)) success = 0;
+
+    for (int i = 0; i < t->n_layers && success; i++) {
+        if (!load_encoder_block(t->encoder_layers[i], fp)) success = 0;
+    }
+    for (int i = 0; i < t->n_layers && success; i++) {
+        if (!load_decoder_block(t->decoder_layers[i], fp)) success = 0;
+    }
+
+    if (success) {
+        free_tensor(t->output_layer);
+        t->output_layer = load_tensor(fp, NULL);
+        if (!t->output_layer) success = 0;
+    }
 
     fclose(fp);
-    return 1;
+    return success;
 }

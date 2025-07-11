@@ -39,4 +39,14 @@ void token_embedding_forward(Tensor* out, Tensor* in, TokenEmbedding* emb) {
                    emb->embed_dim * sizeof(float));
         }
     }
+}
+
+int save_token_embedding(TokenEmbedding* te, FILE* fp) {
+    return save_tensor(te->weights, fp);
+}
+
+int load_token_embedding(TokenEmbedding* te, FILE* fp) {
+    free_tensor(te->weights);
+    te->weights = load_tensor(fp, NULL);
+    return te->weights != NULL;
 } 

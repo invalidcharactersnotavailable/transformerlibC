@@ -10,7 +10,9 @@ typedef struct {
 
 FeedForward* create_feedforward(int embed_dim, int hidden_dim);
 void free_feedforward(FeedForward* ff);
-void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff, Arena* arena);
-Value* feedforward_forward_ad(Value* in, FeedForward* ff, Arena* arena);
+void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff);
+Value* feedforward_forward_ad(Arena* arena, Value* in, FeedForward* ff);
+int save_feedforward(FeedForward* ff, FILE* fp);
+int load_feedforward(FeedForward* ff, FILE* fp);
 
 #endif // FEEDFORWARD_H

@@ -2,6 +2,12 @@ CC=gcc
 CFLAGS=-Iinclude -Wall -g -O3 -fopenmp
 LDFLAGS=-lm -fopenmp
 
+# To use CBLAS, run: make USE_CBLAS=1
+ifeq ($(USE_CBLAS), 1)
+    CFLAGS += -DUSE_CBLAS
+    LDFLAGS += -lcblas
+endif
+
 SRC_DIR=src
 OBJ_DIR=obj
 

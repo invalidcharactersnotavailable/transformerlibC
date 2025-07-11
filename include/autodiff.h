@@ -16,20 +16,21 @@ typedef struct Value {
     int n_prev;
     void (*_backward)(struct Value*);
     void* op_context; // Context for the backward operation
-    Arena* arena;
+    Arena* arena; 
 } Value;
 
-Value* create_value(Tensor* data, Value** prev, int n_prev, void* op_context, Arena* arena, void (*_backward)(struct Value*));
-void free_value(Value* v); // free_value should not be used with arena
-void backward(Value* v, Arena* arena);
+Value* create_value(Arena* arena, Tensor* data, Value** prev, int n_prev, void* op_context, void (*_backward)(struct Value*));
+void free_value(Value* v);
+void backward(Value* v);
+void free_graph(Value* v);
 
-// --- Autodiff-enabled operations ---
-// All these functions create new values and need an arena for temporary allocations
-Value* matmul_ad(Value* a, Value* b, Arena* arena);
-Value* add_ad(Value* a, Value* b, Arena* arena);
-Value* softmax_ad(Value* v, Arena* arena);
-Value* scale_ad(Value* a, float scalar, Arena* arena);
-Value* transpose_ad(Value* a, int dim1, int dim2, Arena* arena);
-Value* relu_ad(Value* a, Arena* arena);
+// autodiff-enabled operations (no arena needed)
+Value* matmul_ad(Arena* arena, Value* a, Value* b);
+Value* add_ad(Arena* arena, Value* a, Value* b);
+Value* softmax_ad(Arena* arena, Value* v);
+Value* scale_ad(Arena* arena, Value* a, float scalar);
+Value* transpose_ad(Arena* arena, Value* a, int dim1, int dim2);
+Value* relu_ad(Arena* arena, Value* a);
+Value* reshape_ad(Arena* arena, Value* a, int n_dims, int* dims);
 
 #endif // AUTODIFF_H 

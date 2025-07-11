@@ -9,9 +9,11 @@ typedef struct {
     Tensor *gamma, *beta; // Trainable parameters
 } LayerNorm;
 
-LayerNorm* create_layernorm(int embed_dim);
+LayerNorm* create_layernorm(int dim);
 void free_layernorm(LayerNorm* ln);
 void layernorm_forward(Tensor* out, Tensor* in, LayerNorm* ln);
-Value* layernorm_forward_ad(Value* in, LayerNorm* ln, Arena* arena);
+Value* layernorm_forward_ad(Arena* arena, Value* in, LayerNorm* ln);
+int save_layernorm(LayerNorm* ln, FILE* fp);
+int load_layernorm(LayerNorm* ln, FILE* fp);
 
 #endif // LAYERNORM_H
