@@ -18,4 +18,4 @@ char* decode(const int* tokens, int num_tokens) {
     }
     text[num_tokens] = '\0';
     return text;
-} 
+}

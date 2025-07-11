@@ -4,10 +4,15 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
+
+static int mha_seeded = 0;
 
 MultiHeadAttention* create_multihead_attention(int embed_dim, int n_heads) {
     assert(embed_dim % n_heads == 0);
+    if (!mha_seeded) { srand((unsigned int)time(NULL)); mha_seeded = 1; }
     MultiHeadAttention* mha = (MultiHeadAttention*)malloc(sizeof(MultiHeadAttention));
+    if (!mha) return NULL;
     mha->embed_dim = embed_dim;
     mha->n_heads = n_heads;
     int w_dims[] = {embed_dim, embed_dim};
@@ -15,6 +20,19 @@ MultiHeadAttention* create_multihead_attention(int embed_dim, int n_heads) {
     mha->w_k = create_tensor(2, w_dims, TENSOR_TYPE_FLOAT);
     mha->w_v = create_tensor(2, w_dims, TENSOR_TYPE_FLOAT);
     mha->w_o = create_tensor(2, w_dims, TENSOR_TYPE_FLOAT);
+    if (!mha->w_q || !mha->w_k || !mha->w_v || !mha->w_o) {
+        free_tensor(mha->w_q); free_tensor(mha->w_k); free_tensor(mha->w_v); free_tensor(mha->w_o); free(mha); return NULL;
+    }
+    // xavier uniform initialization
+    float limit = sqrtf(6.0f / (embed_dim + embed_dim));
+    float* params[] = {(float*)mha->w_q->data, (float*)mha->w_k->data, (float*)mha->w_v->data, (float*)mha->w_o->data};
+    size_t n = embed_dim * embed_dim;
+    for (int t = 0; t < 4; t++) {
+        for (size_t i = 0; i < n; i++) {
+            float r = (float)rand() / (float)RAND_MAX;
+            params[t][i] = -limit + 2.0f * limit * r;
+        }
+    }
     return mha;
 }
 
@@ -29,21 +47,26 @@ void free_multihead_attention(MultiHeadAttention* mha) {
 }
 
 Tensor* split_heads(Arena* arena, Tensor* x, int n_heads) {
+    assert(x && x->n_dims == 3);
     int batch_size = x->dims[0];
     int seq_len = x->dims[1];
     int embed_dim = x->dims[2];
     int head_dim = embed_dim / n_heads;
+    assert(embed_dim % n_heads == 0);
     int reshaped_dims[] = {batch_size, seq_len, n_heads, head_dim};
     Tensor* reshaped = create_tensor(arena, 4, reshaped_dims, TENSOR_TYPE_FLOAT);
+    if (!reshaped) return NULL;
     memcpy(reshaped->data, x->data, batch_size * seq_len * embed_dim * sizeof(float));
     int transposed_dims[] = {batch_size, n_heads, seq_len, head_dim};
     Tensor* transposed = create_tensor(arena, 4, transposed_dims, TENSOR_TYPE_FLOAT);
+    if (!transposed) { free_tensor(reshaped); return NULL; }
     transpose(transposed, reshaped, 1, 2);
     free_tensor(reshaped);
     return transposed;
 }
 
 Tensor* combine_heads(Arena* arena, Tensor* x) {
+    assert(x && x->n_dims == 4);
     int batch_size = x->dims[0];
     int n_heads = x->dims[1];
     int seq_len = x->dims[2];
@@ -51,53 +74,59 @@ Tensor* combine_heads(Arena* arena, Tensor* x) {
     int embed_dim = n_heads * head_dim;
     int transposed_dims[] = {batch_size, seq_len, n_heads, head_dim};
     Tensor* transposed = create_tensor(arena, 4, transposed_dims, TENSOR_TYPE_FLOAT);
+    if (!transposed) return NULL;
     transpose(transposed, x, 1, 2);
     int final_dims[] = {batch_size, seq_len, embed_dim};
     Tensor* final_tensor = create_tensor(arena, 3, final_dims, TENSOR_TYPE_FLOAT);
+    if (!final_tensor) { free_tensor(transposed); return NULL; }
     memcpy(final_tensor->data, transposed->data, batch_size * seq_len * embed_dim * sizeof(float));
     free_tensor(transposed);
     return final_tensor;
 }
 
 void multihead_attention_forward(Tensor* out, Tensor* q_in, Tensor* k_in, Tensor* v_in, MultiHeadAttention* mha, Tensor* mask) {
-    // This function is not arena-aware and will leak memory.
+    assert(out && q_in && k_in && v_in && mha);
     int batch_size = q_in->dims[0];
     int seq_len_q = q_in->dims[1];
     int seq_len_kv = k_in->dims[1];
     int embed_dim = mha->embed_dim;
-
+    int n_heads = mha->n_heads;
+    float scale = 1.0f / sqrtf((float)(embed_dim / n_heads));
     Tensor* q = create_tensor(NULL, 3, (int[]){batch_size, seq_len_q, embed_dim}, TENSOR_TYPE_FLOAT);
     Tensor* k = create_tensor(NULL, 3, (int[]){batch_size, seq_len_kv, embed_dim}, TENSOR_TYPE_FLOAT);
     Tensor* v = create_tensor(NULL, 3, (int[]){batch_size, seq_len_kv, embed_dim}, TENSOR_TYPE_FLOAT);
-
+    if (!q || !k || !v) { free_tensor(q); free_tensor(k); free_tensor(v); return; }
     matmul(q, q_in, mha->w_q);
     matmul(k, k_in, mha->w_k);
     matmul(v, v_in, mha->w_v);
-
-    Tensor* q_split = split_heads(NULL, q, mha->n_heads);
-    Tensor* k_split = split_heads(NULL, k, mha->n_heads);
-    Tensor* v_split = split_heads(NULL, v, mha->n_heads);
-
+    Tensor* q_split = split_heads(NULL, q, n_heads);
+    Tensor* k_split = split_heads(NULL, k, n_heads);
+    Tensor* v_split = split_heads(NULL, v, n_heads);
+    if (!q_split || !k_split || !v_split) { free_tensor(q); free_tensor(k); free_tensor(v); free_tensor(q_split); free_tensor(k_split); free_tensor(v_split); return; }
     int k_t_dims[] = {k_split->dims[0], k_split->dims[1], k_split->dims[3], k_split->dims[2]};
     Tensor* k_t = create_tensor(NULL, 4, k_t_dims, TENSOR_TYPE_FLOAT);
+    if (!k_t) { free_tensor(q); free_tensor(k); free_tensor(v); free_tensor(q_split); free_tensor(k_split); free_tensor(v_split); return; }
     transpose(k_t, k_split, 2, 3);
-
     int scores_dims[] = {q_split->dims[0], q_split->dims[1], q_split->dims[2], k_t->dims[3]};
     Tensor* scores = create_tensor(NULL, 4, scores_dims, TENSOR_TYPE_FLOAT);
+    if (!scores) { free_tensor(q); free_tensor(k); free_tensor(v); free_tensor(q_split); free_tensor(k_split); free_tensor(v_split); free_tensor(k_t); return; }
     matmul(scores, q_split, k_t);
-
+    // scale scores
+    for (int i = 0; i < scores->dims[0] * scores->dims[1] * scores->dims[2] * scores->dims[3]; i++) {
+        ((float*)scores->data)[i] *= scale;
+    }
     if (mask) {
+        assert(mask->n_dims == scores->n_dims);
+        for (int i = 0; i < scores->n_dims; i++) assert(mask->dims[i] == scores->dims[i]);
         add(scores, scores, mask);
     }
-
     softmax(scores);
-
     Tensor* attn_out_split = create_tensor(NULL, 4, q_split->dims, TENSOR_TYPE_FLOAT);
+    if (!attn_out_split) { free_tensor(q); free_tensor(k); free_tensor(v); free_tensor(q_split); free_tensor(k_split); free_tensor(v_split); free_tensor(k_t); free_tensor(scores); return; }
     matmul(attn_out_split, scores, v_split);
     Tensor* attn_out = combine_heads(NULL, attn_out_split);
-
+    if (!attn_out) { free_tensor(q); free_tensor(k); free_tensor(v); free_tensor(q_split); free_tensor(k_split); free_tensor(v_split); free_tensor(k_t); free_tensor(scores); free_tensor(attn_out_split); return; }
     matmul(out, attn_out, mha->w_o);
-
     free_tensor(q);
     free_tensor(k);
     free_tensor(v);

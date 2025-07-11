@@ -3,10 +3,6 @@
 #include <stdlib.h>
 #include <assert.h>
 
-static void relu_ad_inplace(Value* v) {
-    // This is just a placeholder for a potential future op
-}
-
 FeedForward* create_feedforward(int embed_dim, int hidden_dim) {
     FeedForward* ff = (FeedForward*)malloc(sizeof(FeedForward));
     int w1_dims[] = {embed_dim, hidden_dim};
@@ -42,9 +38,6 @@ void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff) {
     free_tensor(hidden);
 }
 
-void backward_feedforward(Value* v) {
-    // Placeholder for feedforward backward pass
-}
 
 Value* feedforward_forward_ad(Arena* arena, Value* in, FeedForward* ff) {
     Value* w1_val = create_value(arena, ff->w1, NULL, 0, NULL, NULL);

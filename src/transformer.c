@@ -65,25 +65,38 @@ void free_transformer(Transformer* t) {
 }
 
 void transformer_forward(Tensor* out, Tensor* src_in, Tensor* tgt_in, Transformer* t, int training) {
-    // Encoder forward pass
-    Tensor* encoder_out = create_tensor(src_in->n_dims, src_in->dims, TENSOR_TYPE_FLOAT);
-    // Note: This is a simplified forward pass for the encoder
-    // A proper implementation would handle embeddings and sequential layer processing
-    encoder_block_forward(encoder_out, src_in, t->encoder_layers[0], training);
-    for (int i = 1; i < t->n_layers; i++) {
-        encoder_block_forward(encoder_out, encoder_out, t->encoder_layers[i], training);
+    // embeddings
+    Tensor* src_embed = create_tensor(src_in->n_dims, src_in->dims, TENSOR_TYPE_FLOAT);
+    embedding_forward(src_embed, src_in, t->src_embedding);
+    Tensor* tgt_embed = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    embedding_forward(tgt_embed, tgt_in, t->tgt_embedding);
+
+    // encoder
+    Tensor* encoder_in = src_embed;
+    Tensor* encoder_out = NULL;
+    for (int i = 0; i < t->n_layers; i++) {
+        encoder_out = create_tensor(encoder_in->n_dims, encoder_in->dims, TENSOR_TYPE_FLOAT);
+        encoder_block_forward(encoder_out, encoder_in, t->encoder_layers[i], training);
+        if (i > 0) free_tensor(encoder_in);
+        encoder_in = encoder_out;
     }
 
-    // Decoder forward pass
-    Tensor* decoder_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
-    // Note: Simplified forward pass for the decoder
-    decoder_block_forward(decoder_out, tgt_in, encoder_out, t->decoder_layers[0], training);
-    for (int i = 1; i < t->n_layers; i++) {
-        decoder_block_forward(decoder_out, decoder_out, encoder_out, t->decoder_layers[i], training);
+    // decoder
+    Tensor* decoder_in = tgt_embed;
+    Tensor* decoder_out = NULL;
+    for (int i = 0; i < t->n_layers; i++) {
+        decoder_out = create_tensor(decoder_in->n_dims, decoder_in->dims, TENSOR_TYPE_FLOAT);
+        decoder_block_forward(decoder_out, decoder_in, encoder_out, t->decoder_layers[i], training);
+        if (i > 0) free_tensor(decoder_in);
+        decoder_in = decoder_out;
     }
-    
-    // Final output layer
+
+    // output projection (e.g., linear layer)
     matmul(out, decoder_out, t->output_layer);
+
+    // free intermediates
+    free_tensor(src_embed);
+    free_tensor(tgt_embed);
     free_tensor(encoder_out);
     free_tensor(decoder_out);
 }

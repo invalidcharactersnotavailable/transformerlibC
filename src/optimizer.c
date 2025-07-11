@@ -5,8 +5,9 @@
 #include <stdint.h>
 
 // count params in model
-static int count_params(Transformer* model) {
-    int count = 0;
+static size_t count_params(Transformer* model) {
+    if (!model) return 0;
+    size_t count = 0;
     count++; // embedding
     for (int i = 0; i < model->n_layers; i++) {
         EncoderBlock* enc = model->encoder_layers[i];
@@ -20,7 +21,8 @@ static int count_params(Transformer* model) {
 
 // fill params in model
 static void fill_params(Transformer* model, Tensor** params) {
-    int count = 0;
+    if (!model || !params) return;
+    size_t count = 0;
     params[count++] = model->embedding->weights;
     for (int i = 0; i < model->n_layers; i++) {
         EncoderBlock* enc = model->encoder_layers[i];
@@ -60,33 +62,47 @@ static void fill_params(Transformer* model, Tensor** params) {
 }
 
 int gather_params(Transformer* model, Tensor** params) {
+    if (!model || !params) return 0;
     fill_params(model, params);
-    return count_params(model);
+    return (int)count_params(model);
 }
 
+// create an optimizer for a model
 Optimizer* create_optimizer(Transformer* model, float learning_rate) {
     return create_optimizer_with_type(model, learning_rate, OPTIMIZER_ADAM);
 }
 
+// create an optimizer with a specific type
 Optimizer* create_optimizer_with_type(Transformer* model, float learning_rate, int type) {
+    if (!model) return NULL;
     Optimizer* opt = (Optimizer*)malloc(sizeof(Optimizer));
+    if (!opt) return NULL;
     opt->model = model;
     opt->learning_rate = learning_rate;
-    int n = count_params(model);
+    size_t n = count_params(model);
     opt->params = (Tensor**)malloc(n * sizeof(Tensor*));
+    if (!opt->params) { free(opt); return NULL; }
     fill_params(model, opt->params);
     opt->num_params = n;
     opt->type = type;
     opt->mixed_precision = 0;
     if (type == OPTIMIZER_ADAM) {
         opt->adam = (struct AdamState*)malloc(sizeof(struct AdamState));
+        if (!opt->adam) { free(opt->params); free(opt); return NULL; }
         opt->adam->m = (float**)malloc(n * sizeof(float*));
         opt->adam->v = (float**)malloc(n * sizeof(float*));
-        for (int i = 0; i < n; i++) {
+        if (!opt->adam->m || !opt->adam->v) {
+            free(opt->adam->m); free(opt->adam->v); free(opt->adam); free(opt->params); free(opt); return NULL;
+        }
+        for (size_t i = 0; i < n; i++) {
             size_t sz = 1;
             for (int d = 0; d < opt->params[i]->n_dims; d++) sz *= opt->params[i]->dims[d];
             opt->adam->m[i] = (float*)calloc(sz, sizeof(float));
             opt->adam->v[i] = (float*)calloc(sz, sizeof(float));
+            if (!opt->adam->m[i] || !opt->adam->v[i]) {
+                for (size_t j = 0; j <= i; j++) { free(opt->adam->m[j]); free(opt->adam->v[j]); }
+                free(opt->adam->m); free(opt->adam->v); free(opt->adam); free(opt->params); free(opt); return NULL;
+            }
         }
         opt->adam->t = 0;
     } else {
@@ -95,13 +111,17 @@ Optimizer* create_optimizer_with_type(Transformer* model, float learning_rate, i
     return opt;
 }
 
+// enable or disable mixed precision
 void optimizer_enable_mixed_precision(Optimizer* opt, int enable) {
+    if (!opt) return;
     opt->mixed_precision = enable;
 }
 
+// free optimizer and all associated memory
 void free_optimizer(Optimizer* opt) {
+    if (!opt) return;
     if (opt->adam) {
-        for (int i = 0; i < opt->num_params; i++) {
+        for (size_t i = 0; i < opt->num_params; i++) {
             free(opt->adam->m[i]);
             free(opt->adam->v[i]);
         }
@@ -113,17 +133,19 @@ void free_optimizer(Optimizer* opt) {
     free(opt);
 }
 
+// perform an optimizer step
 void optimizer_step(Optimizer* opt) {
+    if (!opt) return;
     float lr = opt->learning_rate;
     if (opt->type == OPTIMIZER_SGD) {
-        for (int i = 0; i < opt->num_params; i++) {
+        for (size_t i = 0; i < opt->num_params; i++) {
             Tensor* param = opt->params[i];
+            if (!param || !param->data || !param->grad) continue;
             float* p = (float*)param->data;
             float* g = (float*)param->grad;
             size_t sz = 1;
             for (int d = 0; d < param->n_dims; d++) sz *= param->dims[d];
             if (opt->mixed_precision && param->dtype == TENSOR_TYPE_FLOAT16) {
-                // convert grad to float32, update, then cast back
                 for (size_t j = 0; j < sz; j++) {
                     float grad32 = float16_to_float32(((uint16_t*)g)[j]);
                     float param32 = float16_to_float32(((uint16_t*)p)[j]);
@@ -139,8 +161,11 @@ void optimizer_step(Optimizer* opt) {
     } else if (opt->type == OPTIMIZER_ADAM) {
         float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-8f;
         opt->adam->t++;
-        for (int i = 0; i < opt->num_params; i++) {
+        float beta1_pow = powf(beta1, opt->adam->t);
+        float beta2_pow = powf(beta2, opt->adam->t);
+        for (size_t i = 0; i < opt->num_params; i++) {
             Tensor* param = opt->params[i];
+            if (!param || !param->data || !param->grad) continue;
             float* p = (float*)param->data;
             float* g = (float*)param->grad;
             float* m = opt->adam->m[i];
@@ -153,8 +178,8 @@ void optimizer_step(Optimizer* opt) {
                     float param32 = float16_to_float32(((uint16_t*)p)[j]);
                     m[j] = beta1 * m[j] + (1 - beta1) * grad32;
                     v[j] = beta2 * v[j] + (1 - beta2) * grad32 * grad32;
-                    float m_hat = m[j] / (1 - powf(beta1, opt->adam->t));
-                    float v_hat = v[j] / (1 - powf(beta2, opt->adam->t));
+                    float m_hat = m[j] / (1 - beta1_pow);
+                    float v_hat = v[j] / (1 - beta2_pow);
                     param32 -= lr * m_hat / (sqrtf(v_hat) + eps);
                     ((uint16_t*)p)[j] = float32_to_float16(param32);
                 }
@@ -162,8 +187,8 @@ void optimizer_step(Optimizer* opt) {
                 for (size_t j = 0; j < sz; j++) {
                     m[j] = beta1 * m[j] + (1 - beta1) * g[j];
                     v[j] = beta2 * v[j] + (1 - beta2) * g[j] * g[j];
-                    float m_hat = m[j] / (1 - powf(beta1, opt->adam->t));
-                    float v_hat = v[j] / (1 - powf(beta2, opt->adam->t));
+                    float m_hat = m[j] / (1 - beta1_pow);
+                    float v_hat = v[j] / (1 - beta2_pow);
                     p[j] -= lr * m_hat / (sqrtf(v_hat) + eps);
                 }
             }
@@ -171,9 +196,12 @@ void optimizer_step(Optimizer* opt) {
     }
 }
 
+// zero all gradients in the optimizer
 void zero_grad(Optimizer* opt) {
-    for (int i = 0; i < opt->num_params; i++) {
+    if (!opt) return;
+    for (size_t i = 0; i < opt->num_params; i++) {
         Tensor* param = opt->params[i];
+        if (!param || !param->grad) continue;
         float* g = (float*)param->grad;
         size_t sz = 1;
         for (int d = 0; d < param->n_dims; d++) sz *= param->dims[d];

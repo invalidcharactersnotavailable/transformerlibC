@@ -1,17 +1,34 @@
 #include "embedding.h"
+#include <math.h>
 #include <stdlib.h>
+#include <time.h>
 #include <assert.h>
 #include <string.h>
 
 TokenEmbedding* create_token_embedding(int vocab_size, int embed_dim) {
     TokenEmbedding* emb = (TokenEmbedding*)malloc(sizeof(TokenEmbedding));
+    if (!emb) return NULL;
     emb->vocab_size = vocab_size;
     emb->embed_dim = embed_dim;
 
     int weights_dims[] = {vocab_size, embed_dim};
     emb->weights = create_tensor(2, weights_dims, TENSOR_TYPE_FLOAT, NULL);
+    if (!emb->weights) {
+        free(emb);
+        return NULL;
+    }
 
-    // TODO: Initialize weights with some distribution (e.g., Xavier)
+    // xavier uniform initialization
+    float limit = sqrtf(6.0f / (vocab_size + embed_dim));
+    float* data = (float*)emb->weights->data;
+    size_t n = vocab_size * embed_dim;
+    // seed random only once per program (should be in main, but fallback here)
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned int)time(NULL)); seeded = 1; }
+    for (size_t i = 0; i < n; i++) {
+        float r = (float)rand() / (float)RAND_MAX;
+        data[i] = -limit + 2.0f * limit * r;
+    }
     return emb;
 }
 

@@ -119,8 +119,7 @@ int save_tensor(Tensor* t, FILE* fp) {
     size_t total_elements = 1;
     for (int i = 0; i < t->n_dims; i++) total_elements *= t->dims[i];
     
-    size_t element_size = (t->dtype == TENSOR_TYPE_FLOAT) ? sizeof(float) :
-                          (t->dtype == TENSOR_TYPE_INT) ? sizeof(int) : sizeof(uint16_t);
+    size_t element_size = (t->dtype == TENSOR_TYPE_FLOAT) ? sizeof(float) : (t->dtype == TENSOR_TYPE_INT) ? sizeof(int) : sizeof(uint16_t);
 
     if (fwrite(t->data, element_size, total_elements, fp) != total_elements) return 0;
 
@@ -461,75 +460,52 @@ void transpose(Tensor* out, Tensor* in, int dim1, int dim2) {
     assert(out->dtype == TENSOR_TYPE_FLOAT);
     assert(in->n_dims > dim1 && in->n_dims > dim2);
     assert(out->n_dims == in->n_dims);
+    // check output dims
     for (int i = 0; i < in->n_dims; i++) {
         if (i == dim1) assert(out->dims[i] == in->dims[dim2]);
         else if (i == dim2) assert(out->dims[i] == in->dims[dim1]);
         else assert(out->dims[i] == in->dims[i]);
     }
-
+    if (dim1 == dim2) {
+        // no-op transpose
+        memcpy(out->data, in->data, tensor_numel(in) * sizeof(float));
+        return;
+    }
+    int n_dims = in->n_dims;
+    int* in_strides = (int*)malloc(n_dims * sizeof(int));
+    int* out_strides = (int*)malloc(n_dims * sizeof(int));
+    in_strides[n_dims-1] = 1;
+    out_strides[n_dims-1] = 1;
+    for (int i = n_dims-2; i >= 0; i--) {
+        in_strides[i] = in_strides[i+1] * in->dims[i+1];
+        out_strides[i] = out_strides[i+1] * out->dims[i+1];
+    }
+    int total = tensor_numel(in);
     float* in_data = (float*)in->data;
     float* out_data = (float*)out->data;
-    // This is a generic N-dimensional transpose, but it's complex.
-    // Let's implement the specific 4D case we need for attention: (B, S, H, D) -> (B, H, S, D)
-    if (in->n_dims == 4 && dim1 == 1 && dim2 == 2) {
-        int B = in->dims[0];
-        int S = in->dims[1];
-        int H = in->dims[2];
-        int D = in->dims[3];
-
-        for (int b = 0; b < B; b++) {
-            for (int s = 0; s < S; s++) {
-                for (int h = 0; h < H; h++) {
-                    for (int d = 0; d < D; d++) {
-                        // Source index: b*S*H*D + s*H*D + h*D + d
-                        // Destination index: b*H*S*D + h*S*D + s*D + d
-                        out_data[b*H*S*D + h*S*D + s*D + d] = in_data[b*S*H*D + s*H*D + h*D + d];
-                    }
-                }
-            }
+    // for each element, compute its output index with dim1/dim2 swapped
+    for (int idx = 0; idx < total; idx++) {
+        int in_idx = idx;
+        int coord[16]; // supports up to 16D
+        for (int d = 0; d < n_dims; d++) {
+            coord[d] = in_idx / in_strides[d];
+            in_idx = in_idx % in_strides[d];
         }
-        return;
-    }
-    
-    // Transposing last two dimensions, e.g. for attention scores (B, H, S, D) -> (B, H, D, S)
-    if (in->n_dims == 4 && dim1 == 2 && dim2 == 3) {
-        int B = in->dims[0];
-        int H = in->dims[1];
-        int S = in->dims[2];
-        int D = in->dims[3];
-
-        for (int b = 0; b < B; b++) {
-            for (int h = 0; h < H; h++) {
-                for (int s = 0; s < S; s++) {
-                    for (int d = 0; d < D; d++) {
-                        // Source index: b*H*S*D + h*S*D + s*D + d
-                        // Destination index: b*H*D*S + h*D*S + d*S + s
-                        out_data[b*H*D*S + h*D*S + d*S + s] = in_data[b*H*S*D + h*S*D + s*D + d];
-                    }
-                }
-            }
+        // swap dim1 and dim2 for output
+        int out_coord[16];
+        for (int d = 0; d < n_dims; d++) out_coord[d] = coord[d];
+        int tmp = out_coord[dim1];
+        out_coord[dim1] = out_coord[dim2];
+        out_coord[dim2] = tmp;
+        // compute output flat index
+        int out_idx = 0;
+        for (int d = 0; d < n_dims; d++) {
+            out_idx += out_coord[d] * out_strides[d];
         }
-        return;
+        out_data[out_idx] = in_data[idx];
     }
-
-    // Transposing last two dimensions of a 3D tensor (B, S, D) -> (B, D, S)
-    if (in->n_dims == 3 && dim1 == 1 && dim2 == 2) {
-        int B = in->dims[0];
-        int S = in->dims[1];
-        int D = in->dims[2];
-        for (int b = 0; b < B; b++) {
-            for (int s = 0; s < S; s++) {
-                for (int d = 0; d < D; d++) {
-                    out_data[b*D*S + d*S + s] = in_data[b*S*D + s*D + d];
-                }
-            }
-        }
-        return;
-    }
-
-
-    fprintf(stderr, "Unsupported transpose dimensions\n");
-    assert(0);
+    free(in_strides);
+    free(out_strides);
 }
 
 void scale(Tensor* out, Tensor* in, float scalar) {

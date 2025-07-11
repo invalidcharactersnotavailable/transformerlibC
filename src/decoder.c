@@ -90,4 +90,4 @@ int load_decoder_block(DecoderBlock* block, FILE* fp) {
     if (!load_layernorm(block->ln2, fp)) return 0;
     if (!load_layernorm(block->ln3, fp)) return 0;
     return 1;
-} 
+}

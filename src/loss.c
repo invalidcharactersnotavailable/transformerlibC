@@ -7,33 +7,52 @@
 #include <stdio.h>
 
 void cross_entropy_loss(float* loss, Tensor* logits, Tensor* targets) {
-    // This is a simplified implementation assuming batch_size = 1 and 2D logits (seq_len, vocab_size)
+    // logits: (batch_size, seq_len, vocab_size) or (seq_len, vocab_size) if batch_size==1
+    // targets: (batch_size, seq_len) or (seq_len) if batch_size==1
     assert(logits->dtype == TENSOR_TYPE_FLOAT);
     assert(targets->dtype == TENSOR_TYPE_INT);
+    int n_dims = logits->n_dims;
+    int batch_size, seq_len, vocab_size;
+    if (n_dims == 3) {
+        batch_size = logits->dims[0];
+        seq_len = logits->dims[1];
+        vocab_size = logits->dims[2];
+        assert(targets->n_dims == 2);
+        assert(targets->dims[0] == batch_size && targets->dims[1] == seq_len);
+    } else if (n_dims == 2) {
+        batch_size = 1;
+        seq_len = logits->dims[0];
+        vocab_size = logits->dims[1];
+        assert(targets->n_dims == 1);
+        assert(targets->dims[0] == seq_len);
+    } else {
+        assert(0 && "logits must be 2D or 3D");
+    }
     float* logits_data = (float*)logits->data;
     int* targets_data = (int*)targets->data;
-
-    int seq_len = logits->dims[0];
-    int vocab_size = logits->dims[1];
     float loss_val = 0.0f;
-
-    for (int i = 0; i < seq_len; i++) {
-        float max_logit = logits_data[i * vocab_size];
-        for (int j = 1; j < vocab_size; j++) {
-            if (logits_data[i * vocab_size + j] > max_logit) {
-                max_logit = logits_data[i * vocab_size + j];
+    int total = batch_size * seq_len;
+    for (int b = 0; b < batch_size; b++) {
+        for (int i = 0; i < seq_len; i++) {
+            int logit_offset = (batch_size == 1) ? (i * vocab_size) : (b * seq_len * vocab_size + i * vocab_size);
+            int target_offset = (batch_size == 1) ? i : (b * seq_len + i);
+            float max_logit = logits_data[logit_offset];
+            for (int j = 1; j < vocab_size; j++) {
+                if (logits_data[logit_offset + j] > max_logit) {
+                    max_logit = logits_data[logit_offset + j];
+                }
             }
+            float sum_exp = 0.0f;
+            for (int j = 0; j < vocab_size; j++) {
+                sum_exp += expf(logits_data[logit_offset + j] - max_logit);
+            }
+            int target_idx = targets_data[target_offset];
+            assert(target_idx >= 0 && target_idx < vocab_size);
+            float log_prob = logits_data[logit_offset + target_idx] - max_logit - logf(sum_exp);
+            loss_val += -log_prob;
         }
-
-        float sum_exp = 0.0f;
-        for (int j = 0; j < vocab_size; j++) {
-            sum_exp += expf(logits_data[i * vocab_size + j] - max_logit);
-        }
-        
-        int target_idx = targets_data[i];
-        loss_val += -logf(expf(logits_data[i * vocab_size + target_idx] - max_logit) / sum_exp);
     }
-    *loss = loss_val / seq_len;
+    *loss = loss_val / total;
 }
 
 void backward_cross_entropy(Value* v) {
