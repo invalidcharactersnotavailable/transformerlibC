@@ -32,12 +32,11 @@ void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff);
 
 /**
  * feedforward_forward_ad - autodiff forward pass for feedforward block
- * @arena: memory arena
  * @in: input value
  * @ff: feedforward block
  * returns: autodiff value
  */
-Value* feedforward_forward_ad(Arena* arena, Value* in, FeedForward* ff);
+Value* feedforward_forward_ad(Value* in, FeedForward* ff);
 
 /**
  * save_feedforward - write feedforward block to file

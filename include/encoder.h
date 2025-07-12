@@ -46,13 +46,12 @@ void encoder_block_forward(Tensor* out, Tensor* in, EncoderBlock* block, int tra
 
 /**
  * encoder_block_forward_ad - autodiff forward pass for encoder block
- * @arena: memory arena
  * @in: input value
  * @block: encoder block
  * @training: training mode flag
  * returns: autodiff value
  */
-Value* encoder_block_forward_ad(Arena* arena, Value* in, EncoderBlock* block, int training);
+Value* encoder_block_forward_ad(Value* in, EncoderBlock* block, int training);
 
 /**
  * save_encoder_block - write encoder block to file

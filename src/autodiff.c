@@ -8,19 +8,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-Value* create_value(Arena* arena, Tensor* data, Value** prev, int n_prev, void* op_context, void (*_backward)(struct Value*)) {
-    Value* v;
-    if (arena) {
-        v = (Value*)arena_alloc(arena, sizeof(Value));
-        if (!v) { fprintf(stderr, "[ERR] arena_alloc failed for Value\n"); return NULL; }
-        v->prev = n_prev > 0 ? (Value**)arena_alloc(arena, n_prev * sizeof(Value*)) : NULL;
-        if (n_prev > 0 && !v->prev) { fprintf(stderr, "[ERR] arena_alloc failed for Value prev\n"); return NULL; }
-    } else {
-        v = (Value*)malloc(sizeof(Value));
-        if (!v) { fprintf(stderr, "[ERR] malloc failed for Value\n"); return NULL; }
-        v->prev = n_prev > 0 ? (Value**)malloc(n_prev * sizeof(Value*)) : NULL;
-        if (n_prev > 0 && !v->prev) { fprintf(stderr, "[ERR] malloc failed for Value prev\n"); free(v); return NULL; }
-    }
+Value* create_value(Tensor* data, Value** prev, int n_prev, void* op_context, void (*_backward)(struct Value*)) {
+    Value* v = (Value*)malloc(sizeof(Value));
+    if (!v) { fprintf(stderr, "[ERR] malloc failed for Value\n"); return NULL; }
+    v->prev = n_prev > 0 ? (Value**)malloc(n_prev * sizeof(Value*)) : NULL;
+    if (n_prev > 0 && !v->prev) { fprintf(stderr, "[ERR] malloc failed for Value prev\n"); free(v); return NULL; }
     
     v->data = data;
     v->grad = NULL;
@@ -30,7 +22,6 @@ Value* create_value(Arena* arena, Tensor* data, Value** prev, int n_prev, void* 
     }
     v->_backward = _backward;
     v->op_context = op_context;
-    v->arena = arena;
     return v;
 }
 
@@ -47,153 +38,112 @@ void backward_add(Value* v) {
     assert(v->n_prev == 2);
     Value* a = v->prev[0];
     Value* b = v->prev[1];
-    // Gradient of add is 1, so we just add the output grad to both inputs.
-    // Note: This needs to handle broadcasting correctly for a robust solution,
-    // but for now, we assume gradients have the correct shapes.
+
+    // Handle broadcasting for b's gradient
+    if (a->data->n_dims > b->data->n_dims) {
+        // b was broadcast over a. We need to sum the gradient over the broadcast dimensions.
+        int diff_dims = a->data->n_dims - b->data->n_dims;
+        int* sum_axes = (int*)malloc(diff_dims * sizeof(int));
+        for (int i = 0; i < diff_dims; i++) {
+            sum_axes[i] = i;
+        }
+
+        Tensor* b_grad_sum = create_tensor(b->grad->n_dims, b->grad->dims, b->grad->dtype);
+        sum(b_grad_sum, v->grad, sum_axes, diff_dims);
+        add(b->grad, b->grad, b_grad_sum);
+
+        free(sum_axes);
+        free_tensor(b_grad_sum);
+    } else {
+        add(b->grad, b->grad, v->grad);
+    }
+
+    // Gradient for a is straightforward addition
     add(a->grad, a->grad, v->grad);
-    add(b->grad, b->grad, v->grad);
 }
 
-Value* add_ad(Arena* arena, Value* a, Value* b) {
+Value* add_ad(Value* a, Value* b) {
     // Determine output shape, considering broadcasting
     assert(a->data->n_dims >= b->data->n_dims);
-    int* out_dims = (int*)arena_alloc(arena, a->data->n_dims * sizeof(int));
+    int* out_dims = (int*)malloc(a->data->n_dims * sizeof(int));
     memcpy(out_dims, a->data->dims, a->data->n_dims * sizeof(int));
-    Tensor* out_data = create_tensor(arena, a->data->n_dims, out_dims, TENSOR_TYPE_FLOAT);
+    Tensor* out_data = create_tensor(a->data->n_dims, out_dims, TENSOR_TYPE_FLOAT);
     free(out_dims);
 
     add(out_data, a->data, b->data);
-    Value** prev = (Value**)arena_alloc(arena, 2 * sizeof(Value*));
+    Value** prev = (Value**)malloc(2 * sizeof(Value*));
     prev[0] = a;
     prev[1] = b;
-    return create_value(arena, out_data, prev, 2, NULL, backward_add);
+    return create_value(out_data, prev, 2, NULL, backward_add);
 }
 
 void backward_matmul(Value* v) {
     assert(v->n_prev == 2);
     Value* a = v->prev[0];
     Value* b = v->prev[1];
-    Tensor* dC = v->grad; // Gradient of the output
+    Tensor* dC = v->grad;
 
-    // Create temporary tensors for the gradients to be computed
-    Tensor* dA = create_tensor(a->data->n_dims, a->data->dims, TENSOR_TYPE_FLOAT);
-    Tensor* dB = create_tensor(b->data->n_dims, b->data->dims, TENSOR_TYPE_FLOAT);
-
-    // Case 1: Simple 2D x 2D -> 2D
-    if (a->data->n_dims == 2 && b->data->n_dims == 2) {
-        // dA = dC @ B.T
-        Tensor* b_t = create_tensor(2, (int[]){b->data->dims[1], b->data->dims[0]}, TENSOR_TYPE_FLOAT);
-        transpose(b_t, b->data, 0, 1);
-        matmul(dA, dC, b_t);
-        free_tensor(b_t);
-
-        // dB = A.T @ dC
-        Tensor* a_t = create_tensor(2, (int[]){a->data->dims[1], a->data->dims[0]}, TENSOR_TYPE_FLOAT);
-        transpose(a_t, a->data, 0, 1);
-        matmul(dB, a_t, dC);
-        free_tensor(a_t);
-    }
-    // Case 2: Batched 3D x 2D -> 3D (e.g. (B, S, E) @ (E, F) -> (B, S, F))
-    else if (a->data->n_dims == 3 && b->data->n_dims == 2) {
-        // dA = dC @ B.T = (B, S, F) @ (F, E) -> (B, S, E)
-        Tensor* b_t = create_tensor(2, (int[]){b->data->dims[1], b->data->dims[0]}, TENSOR_TYPE_FLOAT);
-        transpose(b_t, b->data, 0, 1);
-        matmul(dA, dC, b_t);
-        free_tensor(b_t);
-
-        // dB = A.T @ dC. This requires reshaping and summation over the batch dimension.
-        // Reshape A from (B, S, E) to (B*S, E)
-        // Reshape dC from (B, S, F) to (B*S, F)
-        // A.T becomes (E, B*S)
-        // Then (E, B*S) @ (B*S, F) -> (E, F)
-        int B = a->data->dims[0];
-        int S = a->data->dims[1];
-        int E = a->data->dims[2];
-        int F = b->data->dims[1];
-        
-        Tensor* a_reshaped = create_tensor(2, (int[]){B * S, E}, TENSOR_TYPE_FLOAT);
-        memcpy(a_reshaped->data, a->data->data, (size_t)B * S * E * sizeof(float));
-        
-        Tensor* dC_reshaped = create_tensor(2, (int[]){B * S, F}, TENSOR_TYPE_FLOAT);
-        memcpy(dC_reshaped->data, dC->data, (size_t)B * S * F * sizeof(float));
-
-        Tensor* a_reshaped_t = create_tensor(2, (int[]){E, B * S}, TENSOR_TYPE_FLOAT);
-        transpose(a_reshaped_t, a_reshaped, 0, 1);
-        
-        matmul(dB, a_reshaped_t, dC_reshaped); // dB is (E, F)
-
-        free_tensor(a_reshaped);
-        free_tensor(dC_reshaped);
-        free_tensor(a_reshaped_t);
-    }
-    // Case 3: Batched 4D x 4D -> 4D (e.g. (B, H, S, D) @ (B, H, D, S')) -> (B, H, S, S'))
-    else if (a->data->n_dims == 4 && b->data->n_dims == 4) {
-        // dA = dC @ B.T -> (B,H,S,S') @ (B,H,S',D) -> (B,H,S,D)
-        Tensor* b_t = create_tensor(4, (int[]){b->data->dims[0], b->data->dims[1], b->data->dims[3], b->data->dims[2]}, TENSOR_TYPE_FLOAT);
-        transpose(b_t, b->data, 2, 3);
-        matmul(dA, dC, b_t);
-        free_tensor(b_t);
-
-        // dB = A.T @ dC -> (B,H,D,S) @ (B,H,S,S') -> (B,H,D,S')
-        Tensor* a_t = create_tensor(4, (int[]){a->data->dims[0], a->data->dims[1], a->data->dims[3], a->data->dims[2]}, TENSOR_TYPE_FLOAT);
-        transpose(a_t, a->data, 2, 3);
-        matmul(dB, a_t, dC);
-        free_tensor(a_t);
-    }
-     // Case 4: Batched 3D x 3D -> 3D (e.g. (B, S, E) @ (B, E, T) -> (B, S, T))
-    else if (a->data->n_dims == 3 && b->data->n_dims == 3) {
-        // dA = dC @ B.T = (B, S, T) @ (B, T, E) -> (B, S, E)
-        Tensor* b_t = create_tensor(3, (int[]){b->data->dims[0], b->data->dims[2], b->data->dims[1]}, TENSOR_TYPE_FLOAT);
-        transpose(b_t, b->data, 1, 2);
-        matmul(dA, dC, b_t);
-        free_tensor(b_t);
-
-        // dB = A.T @ dC = (B, E, S) @ (B, S, T) -> (B, E, T)
-        Tensor* a_t = create_tensor(3, (int[]){a->data->dims[0], a->data->dims[2], a->data->dims[1]}, TENSOR_TYPE_FLOAT);
-        transpose(a_t, a->data, 1, 2);
-        matmul(dB, a_t, dC);
-        free_tensor(a_t);
-    }
-    else {
-        fprintf(stderr, "Unsupported matmul dimensions for backward pass: a_dims=%d, b_dims=%d\n", a->data->n_dims, b->data->n_dims);
-        assert(0);
-    }
+    // Gradient for a: dA = dC @ B.T
+    int* b_t_dims = (int*)malloc(b->data->n_dims * sizeof(int));
+    memcpy(b_t_dims, b->data->dims, b->data->n_dims * sizeof(int));
+    int temp = b_t_dims[b->data->n_dims - 2];
+    b_t_dims[b->data->n_dims - 2] = b_t_dims[b->data->n_dims - 1];
+    b_t_dims[b->data->n_dims - 1] = temp;
+    Tensor* b_t = create_tensor(b->data->n_dims, b_t_dims, b->data->dtype);
+    transpose(b_t, b->data, b->data->n_dims - 2, b->data->n_dims - 1);
     
-    // Accumulate gradients
+    Tensor* dA = create_tensor(a->data->n_dims, a->data->dims, a->data->dtype);
+    matmul(dA, dC, b_t);
     add(a->grad, a->grad, dA);
+
+    free(b_t_dims);
+    free_tensor(b_t);
+    free_tensor(dA);
+
+    // Gradient for b: dB = A.T @ dC
+    int* a_t_dims = (int*)malloc(a->data->n_dims * sizeof(int));
+    memcpy(a_t_dims, a->data->dims, a->data->n_dims * sizeof(int));
+    temp = a_t_dims[a->data->n_dims - 2];
+    a_t_dims[a->data->n_dims - 2] = a_t_dims[a->data->n_dims - 1];
+    a_t_dims[a->data->n_dims - 1] = temp;
+    Tensor* a_t = create_tensor(a->data->n_dims, a_t_dims, a->data->dtype);
+    transpose(a_t, a->data, a->data->n_dims - 2, a->data->n_dims - 1);
+
+    Tensor* dB = create_tensor(b->data->n_dims, b->data->dims, b->data->dtype);
+    matmul(dB, a_t, dC);
     add(b->grad, b->grad, dB);
 
-    // Free the temporary tensors
-    free_tensor(dA);
+    free(a_t_dims);
+    free_tensor(a_t);
     free_tensor(dB);
 }
 
-Value* matmul_ad(Arena* arena, Value* a, Value* b) {
+Value* matmul_ad(Value* a, Value* b) {
     // This function needs to correctly determine the output shape based on the input shapes
     int* out_dims;
     int out_n_dims;
 
     if (a->data->n_dims == 2 && b->data->n_dims == 2) {
         out_n_dims = 2;
-        out_dims = (int*)arena_alloc(arena, out_n_dims * sizeof(int));
+        out_dims = (int*)malloc(out_n_dims * sizeof(int));
         out_dims[0] = a->data->dims[0];
         out_dims[1] = b->data->dims[1];
     } else if (a->data->n_dims == 3 && b->data->n_dims == 2) {
         out_n_dims = 3;
-        out_dims = (int*)arena_alloc(arena, out_n_dims * sizeof(int));
+        out_dims = (int*)malloc(out_n_dims * sizeof(int));
         out_dims[0] = a->data->dims[0];
         out_dims[1] = a->data->dims[1];
         out_dims[2] = b->data->dims[1];
     } else if (a->data->n_dims == 4 && b->data->n_dims == 4) {
         out_n_dims = 4;
-        out_dims = (int*)arena_alloc(arena, out_n_dims * sizeof(int));
+        out_dims = (int*)malloc(out_n_dims * sizeof(int));
         out_dims[0] = a->data->dims[0];
         out_dims[1] = a->data->dims[1];
         out_dims[2] = a->data->dims[2];
         out_dims[3] = b->data->dims[3];
     } else if (a->data->n_dims == 3 && b->data->n_dims == 3) {
         out_n_dims = 3;
-        out_dims = (int*)arena_alloc(arena, out_n_dims * sizeof(int));
+        out_dims = (int*)malloc(out_n_dims * sizeof(int));
         out_dims[0] = a->data->dims[0];
         out_dims[1] = a->data->dims[1];
         out_dims[2] = b->data->dims[2];
@@ -202,13 +152,13 @@ Value* matmul_ad(Arena* arena, Value* a, Value* b) {
         assert(0);
     }
 
-    Tensor* out_data = create_tensor(arena, out_n_dims, out_dims, TENSOR_TYPE_FLOAT);
+    Tensor* out_data = create_tensor(out_n_dims, out_dims, TENSOR_TYPE_FLOAT);
     free(out_dims);
     matmul(out_data, a->data, b->data);
-    Value** prev = (Value**)arena_alloc(arena, 2 * sizeof(Value*));
+    Value** prev = (Value**)malloc(2 * sizeof(Value*));
     prev[0] = a;
     prev[1] = b;
-    return create_value(arena, out_data, prev, 2, NULL, backward_matmul);
+    return create_value(out_data, prev, 2, NULL, backward_matmul);
 }
 
 void backward_softmax(Value* v) {
@@ -245,17 +195,12 @@ void backward_softmax(Value* v) {
     }
 }
 
-Value* softmax_ad(Arena* arena, Value* v) {
-    Tensor* out_data = create_tensor(arena, v->data->n_dims, v->data->dims, TENSOR_TYPE_FLOAT);
-    size_t total_elements = 1;
-    for (int i = 0; i < v->data->n_dims; i++) {
-        total_elements *= v->data->dims[i];
-    }
-    memcpy(out_data->data, v->data->data, total_elements * sizeof(float));
-    softmax(out_data->data); // softmax is in-place in tensor.c, should be fixed
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+Value* softmax_ad(Value* v) {
+    Tensor* out_data = create_tensor(v->data->n_dims, v->data->dims, TENSOR_TYPE_FLOAT);
+    softmax(out_data, v->data);
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = v;
-    return create_value(arena, out_data, prev, 1, NULL, backward_softmax);
+    return create_value(out_data, prev, 1, v->op_context, backward_softmax);
 }
 
 void backward_scale(Value* v) {
@@ -268,14 +213,14 @@ void backward_scale(Value* v) {
     free_tensor(temp_grad);
 }
 
-Value* scale_ad(Arena* arena, Value* a, float scalar) {
-    Tensor* out_data = create_tensor(arena, a->data->n_dims, a->data->dims, TENSOR_TYPE_FLOAT);
+Value* scale_ad(Value* a, float scalar) {
+    Tensor* out_data = create_tensor(a->data->n_dims, a->data->dims, TENSOR_TYPE_FLOAT);
     scale(out_data, a->data, scalar);
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = a;
-    float* context = (float*)arena_alloc(arena, sizeof(float));
+    float* context = (float*)malloc(sizeof(float));
     *context = scalar;
-    return create_value(arena, out_data, prev, 1, context, backward_scale);
+    return create_value(out_data, prev, 1, context, backward_scale);
 }
 
 void backward_transpose(Value* v) {
@@ -289,20 +234,21 @@ void backward_transpose(Value* v) {
     add(a->grad, a->grad, temp_grad);
 }
 
-Value* transpose_ad(Arena* arena, Value* a, int dim1, int dim2) {
-    int* new_dims = (int*)arena_alloc(arena, a->data->n_dims * sizeof(int));
+Value* transpose_ad(Value* a, int dim1, int dim2) {
+    int* new_dims = (int*)malloc(a->data->n_dims * sizeof(int));
     memcpy(new_dims, a->data->dims, a->data->n_dims * sizeof(int));
     int temp = new_dims[dim1];
     new_dims[dim1] = new_dims[dim2];
     new_dims[dim2] = temp;
-    Tensor* out_data = create_tensor(arena, a->data->n_dims, new_dims, TENSOR_TYPE_FLOAT);
+    Tensor* out_data = create_tensor(a->data->n_dims, new_dims, TENSOR_TYPE_FLOAT);
+    free(new_dims);
     transpose(out_data, a->data, dim1, dim2);
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = a;
-    int* context = (int*)arena_alloc(arena, 2 * sizeof(int));
+    int* context = (int*)malloc(2 * sizeof(int));
     context[0] = dim1;
     context[1] = dim2;
-    return create_value(arena, out_data, prev, 1, context, backward_transpose);
+    return create_value(out_data, prev, 1, context, backward_transpose);
 }
 
 void backward_reshape(Value* v) {
@@ -319,18 +265,18 @@ void backward_reshape(Value* v) {
     free_tensor(temp_grad);
 }
 
-Value* reshape_ad(Arena* arena, Value* a, int n_dims, int* dims) {
-    Tensor* out_data = create_tensor(arena, n_dims, dims, TENSOR_TYPE_FLOAT);
+Value* reshape_ad(Value* a, int n_dims, int* dims) {
+    Tensor* out_data = create_tensor(n_dims, dims, TENSOR_TYPE_FLOAT);
     // Reshape is a no-op on data for row-major tensors, just changes metadata.
     // We need to copy the data.
     size_t total_elements = 1;
     for (int i = 0; i < a->data->n_dims; i++) total_elements *= a->data->dims[i];
     memcpy(out_data->data, a->data->data, total_elements * sizeof(float));
     
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = a;
     // No context needed for backward, original shape is in prev->data->dims
-    return create_value(arena, out_data, prev, 1, NULL, backward_reshape);
+    return create_value(out_data, prev, 1, NULL, backward_reshape);
 }
 
 void backward_relu(Value* v) {
@@ -352,8 +298,8 @@ void backward_relu(Value* v) {
     }
 }
 
-Value* relu_ad(Arena* arena, Value* a) {
-    Tensor* out_data = create_tensor(arena, a->data->n_dims, a->data->dims, TENSOR_TYPE_FLOAT);
+Value* relu_ad(Value* a) {
+    Tensor* out_data = create_tensor(a->data->n_dims, a->data->dims, TENSOR_TYPE_FLOAT);
     float* in_data_p = (float*)a->data->data;
     float* out_data_p = (float*)out_data->data;
     size_t size = 1;
@@ -363,9 +309,9 @@ Value* relu_ad(Arena* arena, Value* a) {
     for (size_t i = 0; i < size; i++) {
         out_data_p[i] = in_data_p[i] > 0 ? in_data_p[i] : 0;
     }
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = a;
-    return create_value(arena, out_data, prev, 1, NULL, backward_relu);
+    return create_value(out_data, prev, 1, NULL, backward_relu);
 }
 
 
@@ -398,23 +344,33 @@ static void hashset_insert(Value** set, Value* v) {
 
 // iterative topo sort
 static Value** topo_sort_iter(Value* v, int* out_count) {
-    Value** stack = (Value**)malloc(1024 * sizeof(Value*));
-    int stack_size = 0, stack_cap = 1024;
-    Value** sorted = (Value**)malloc(1024 * sizeof(Value*));
-    int sorted_size = 0, sorted_cap = 1024;
+    Value** stack = (Value**)malloc(sizeof(Value*));
+    int stack_size = 0, stack_cap = 1;
+    Value** sorted = (Value**)malloc(sizeof(Value*));
+    int sorted_size = 0, sorted_cap = 1;
     Value** visited = hashset_create();
+
+    if (stack_cap == 0) stack_cap = 1;
+    if (sorted_cap == 0) sorted_cap = 1;
+
     stack[stack_size++] = v;
     hashset_insert(visited, v); // Mark root as visited
 
     while (stack_size > 0) {
         Value* cur = stack[--stack_size];
         
-        if (sorted_size >= sorted_cap) { sorted_cap *= 2; sorted = realloc(sorted, sorted_cap * sizeof(Value*)); }
+        if (sorted_size >= sorted_cap) {
+            sorted_cap *= 2;
+            sorted = (Value**)realloc(sorted, sorted_cap * sizeof(Value*));
+        }
         sorted[sorted_size++] = cur;
 
         for (int i = 0; i < cur->n_prev; i++) {
             if (!hashset_contains(visited, cur->prev[i])) {
-                 if (stack_size >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(Value*)); }
+                if (stack_size >= stack_cap) {
+                    stack_cap *= 2;
+                    stack = (Value**)realloc(stack, stack_cap * sizeof(Value*));
+                }
                 stack[stack_size++] = cur->prev[i];
                 hashset_insert(visited, cur->prev[i]);
             }
@@ -448,8 +404,16 @@ void backward(Value* v) {
     } else {
         ((float*)v->grad->data)[0] = 1.0f;
     }
+
+    for (int i = 0; i < count; i++) {
+        Value* node = sorted_nodes[i];
+        if (node->grad == NULL) {
+            node->grad = create_tensor(node->data->n_dims, node->data->dims, node->data->dtype);
+        }
+    }
     
     for (int i = count - 1; i >= 0; i--) {
+        fprintf(stderr, "node %d, grad: %p\n", i, sorted_nodes[i]->grad);
         if (sorted_nodes[i]->_backward) {
             sorted_nodes[i]->_backward(sorted_nodes[i]);
         }

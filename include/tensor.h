@@ -3,12 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include "memory.h"
 
 #ifdef USE_BLAS
 #include <cblas.h>
 #endif
-
-#include "memory.h"
 
 #define HAS_FLOAT16 1
 
@@ -29,13 +29,12 @@ typedef struct {
 
 /**
  * create_tensor - allocate a tensor with the given shape and type
- * @arena: optional arena for allocation, or NULL for dynamic
  * @n_dims: number of dimensions
  * @dims: array of dimension sizes
  * @dtype: data type
  * returns: pointer to tensor or NULL on failure
  */
-Tensor* create_tensor(Arena* arena, int n_dims, int* dims, DataType dtype);
+Tensor* create_tensor(int n_dims, int* dims, DataType dtype);
 
 /**
  * free_tensor - free a tensor allocated with create_tensor
@@ -61,19 +60,21 @@ int save_tensor(Tensor* t, FILE* fp);
 /**
  * load_tensor - read tensor from file
  * @fp: file pointer
- * @arena: optional arena for allocation, or NULL for dynamic
  * returns: pointer to tensor or NULL on failure
  */
-Tensor* load_tensor(FILE* fp, Arena* arena);
+Tensor* load_tensor(FILE* fp);
 
 // Tensor operations (in-place and out-of-place versions)
 void matmul(Tensor* c, Tensor* a, Tensor* b);
 void add(Tensor* out, Tensor* a, Tensor* b);
-void softmax(Tensor* t);
+void softmax(Tensor* out, Tensor* in);
 void transpose(Tensor* out, Tensor* in, int dim1, int dim2);
 void scale(Tensor* out, Tensor* in, float scalar);
+void sum(Tensor* out, Tensor* in, int* axes, int n_axes);
 
 float float16_to_float32(uint16_t h);
 uint16_t float32_to_float16(float f);
+
+long tensor_numel(Tensor* t);
 
 #endif // TENSOR_H

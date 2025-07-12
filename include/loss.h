@@ -10,6 +10,6 @@
 float cross_entropy_loss(Tensor* logits, Tensor* targets);
 
 // Autodiff-enabled version.
-Value* cross_entropy_loss_ad(Arena* arena, Value* logits, Tensor* targets);
+Value* cross_entropy_loss_ad(Value* logits, Tensor* targets);
 
 #endif // LOSS_H 

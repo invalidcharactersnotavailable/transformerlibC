@@ -32,11 +32,11 @@ void free_feedforward(FeedForward* ff) {
 }
 
 void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff) {
-    Tensor* hidden = create_tensor(NULL, 3, (int[]){in->dims[0], in->dims[1], ff->hidden_dim}, TENSOR_TYPE_FLOAT);
+    Tensor* hidden = create_tensor(3, (int[]){in->dims[0], in->dims[1], ff->w1->dims[1]}, TENSOR_TYPE_FLOAT);
     matmul(hidden, in, ff->w1);
     // relu is in-place
     float* hidden_data = (float*)hidden->data;
-    for (int i = 0; i < in->dims[0] * in->dims[1] * ff->hidden_dim; i++) {
+    for (int i = 0; i < in->dims[0] * in->dims[1] * ff->w1->dims[1]; i++) {
         if (hidden_data[i] < 0) hidden_data[i] = 0;
     }
     matmul(out, hidden, ff->w2);
@@ -44,17 +44,17 @@ void feedforward_forward(Tensor* out, Tensor* in, FeedForward* ff) {
 }
 
 
-Value* feedforward_forward_ad(Arena* arena, Value* in, FeedForward* ff) {
-    Value* w1_val = create_value(arena, ff->w1, NULL, 0, NULL, NULL);
-    Value* w2_val = create_value(arena, ff->w2, NULL, 0, NULL, NULL);
-    Value* b1_val = create_value(arena, ff->b1, NULL, 0, NULL, NULL);
-    Value* b2_val = create_value(arena, ff->b2, NULL, 0, NULL, NULL);
+Value* feedforward_forward_ad(Value* in, FeedForward* ff) {
+    Value* w1_val = create_value(ff->w1, NULL, 0, NULL, NULL);
+    Value* w2_val = create_value(ff->w2, NULL, 0, NULL, NULL);
+    Value* b1_val = create_value(ff->b1, NULL, 0, NULL, NULL);
+    Value* b2_val = create_value(ff->b2, NULL, 0, NULL, NULL);
 
-    Value* hidden = matmul_ad(arena, in, w1_val);
-    hidden = add_ad(arena, hidden, b1_val);
-    hidden = relu_ad(arena, hidden);
-    Value* out = matmul_ad(arena, hidden, w2_val);
-    out = add_ad(arena, out, b2_val);
+    Value* hidden = matmul_ad(in, w1_val);
+    hidden = add_ad(hidden, b1_val);
+    hidden = relu_ad(hidden);
+    Value* out = matmul_ad(hidden, w2_val);
+    out = add_ad(out, b2_val);
     
     return out;
 }
@@ -73,10 +73,10 @@ int load_feedforward(FeedForward* ff, FILE* fp) {
     free_tensor(ff->w2);
     free_tensor(ff->b2);
 
-    ff->w1 = load_tensor(fp, NULL);
-    ff->b1 = load_tensor(fp, NULL);
-    ff->w2 = load_tensor(fp, NULL);
-    ff->b2 = load_tensor(fp, NULL);
+    ff->w1 = load_tensor(fp);
+    ff->b1 = load_tensor(fp);
+    ff->w2 = load_tensor(fp);
+    ff->b2 = load_tensor(fp);
 
     if (!ff->w1 || !ff->b1 || !ff->w2 || !ff->b2) {
         return 0;

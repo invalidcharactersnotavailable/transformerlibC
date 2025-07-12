@@ -38,16 +38,16 @@ void free_decoder_block(DecoderBlock* block) {
 }
 
 void decoder_block_forward(Tensor* out, Tensor* tgt_in, Tensor* encoder_out, DecoderBlock* block, int training) {
-    Tensor* masked_attn_out = create_tensor(NULL, tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* masked_attn_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     multihead_attention_forward(masked_attn_out, tgt_in, tgt_in, tgt_in, block->masked_attention, NULL); // TODO: Add mask
-    Tensor* cross_attn_out = create_tensor(NULL, tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* cross_attn_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     multihead_attention_forward(cross_attn_out, masked_attn_out, encoder_out, encoder_out, block->cross_attention, NULL);
-    Tensor* dropout_out = create_tensor(NULL, tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* dropout_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     dropout_forward(dropout_out, cross_attn_out, block->dropout, training);
-    Tensor* add_norm1 = create_tensor(NULL, tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* add_norm1 = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     add(add_norm1, tgt_in, dropout_out);
     layernorm_forward(add_norm1, add_norm1, block->ln1);
-    Tensor* ff_out = create_tensor(NULL, tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* ff_out = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
     feedforward_forward(ff_out, add_norm1, block->ff);
     dropout_forward(out, ff_out, block->dropout, training);
     free_tensor(masked_attn_out);
@@ -57,24 +57,24 @@ void decoder_block_forward(Tensor* out, Tensor* tgt_in, Tensor* encoder_out, Dec
     free_tensor(ff_out);
 }
 
-Value* decoder_block_forward_ad(Arena* arena, Value* tgt, Value* encoder_out, DecoderBlock* block, int training, Tensor* look_ahead_mask) {
+Value* decoder_block_forward_ad(Value* tgt, Value* encoder_out, DecoderBlock* block, int training, Tensor* look_ahead_mask) {
     // 1. Masked Self-Attention sublayer
-    Value* masked_attn_out = multihead_attention_forward_ad(arena, tgt, tgt, tgt, block->masked_attention, look_ahead_mask);
-    Value* dropout1_out = dropout_forward_ad(arena, masked_attn_out, block->dropout, training);
-    Value* add1 = add_ad(arena, tgt, dropout1_out);
-    Value* norm1 = layernorm_forward_ad(arena, add1, block->ln1);
+    Value* masked_attn_out = multihead_attention_forward_ad(tgt, tgt, tgt, block->masked_attention, look_ahead_mask);
+    Value* dropout1_out = dropout_forward_ad(masked_attn_out, block->dropout, training);
+    Value* add1 = add_ad(tgt, dropout1_out);
+    Value* norm1 = layernorm_forward_ad(add1, block->ln1);
 
     // 2. Cross-Attention sublayer
-    Value* cross_attn_out = multihead_attention_forward_ad(arena, norm1, encoder_out, encoder_out, block->cross_attention, NULL);
-    Value* dropout2_out = dropout_forward_ad(arena, cross_attn_out, block->dropout, training);
-    Value* add2 = add_ad(arena, norm1, dropout2_out);
-    Value* norm2 = layernorm_forward_ad(arena, add2, block->ln2);
+    Value* cross_attn_out = multihead_attention_forward_ad(norm1, encoder_out, encoder_out, block->cross_attention, NULL);
+    Value* dropout2_out = dropout_forward_ad(cross_attn_out, block->dropout, training);
+    Value* add2 = add_ad(norm1, dropout2_out);
+    Value* norm2 = layernorm_forward_ad(add2, block->ln2);
 
     // 3. Feed-Forward sublayer
-    Value* ff_out = feedforward_forward_ad(arena, norm2, block->ff);
-    Value* dropout3_out = dropout_forward_ad(arena, ff_out, block->dropout, training);
-    Value* add3 = add_ad(arena, norm2, dropout3_out);
-    Value* out = layernorm_forward_ad(arena, add3, block->ln3);
+    Value* ff_out = feedforward_forward_ad(norm2, block->ff);
+    Value* dropout3_out = dropout_forward_ad(ff_out, block->dropout, training);
+    Value* add3 = add_ad(norm2, dropout3_out);
+    Value* out = layernorm_forward_ad(add3, block->ln3);
 
     return out;
 } 
