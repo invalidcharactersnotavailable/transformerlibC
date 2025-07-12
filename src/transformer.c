@@ -30,7 +30,7 @@ Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, i
     t->embedding = create_token_embedding(vocab_size, embed_dim);
 
     int pos_dims[] = {max_seq_len, embed_dim};
-    t->pos_encoding = create_tensor(NULL, 2, pos_dims, TENSOR_TYPE_FLOAT);
+    t->pos_encoding = create_tensor(2, pos_dims, TENSOR_TYPE_FLOAT);
     create_positional_encoding(t->pos_encoding, max_seq_len, embed_dim);
 
     t->encoder_layers = (EncoderBlock**)malloc(n_layers * sizeof(EncoderBlock*));
@@ -41,13 +41,26 @@ Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, i
     }
     
     int out_dims[] = {embed_dim, vocab_size};
-    t->output_layer = create_tensor(NULL, 2, out_dims, TENSOR_TYPE_FLOAT);
+    t->output_layer = create_tensor(2, out_dims, TENSOR_TYPE_FLOAT);
 
     int mask_dims[] = {max_seq_len, max_seq_len};
-    t->look_ahead_mask = create_tensor(NULL, 2, mask_dims, TENSOR_TYPE_FLOAT);
+    t->look_ahead_mask = create_tensor(2, mask_dims, TENSOR_TYPE_FLOAT);
     create_look_ahead_mask(t->look_ahead_mask, max_seq_len);
 
     return t;
+}
+
+void create_look_ahead_mask(Tensor* mask, int seq_len) {
+    float* mask_data = (float*)mask->data;
+    for (int i = 0; i < seq_len; i++) {
+        for (int j = 0; j < seq_len; j++) {
+            if (j > i) {
+                mask_data[i * seq_len + j] = -1e9; // Use a large negative value for masking
+            } else {
+                mask_data[i * seq_len + j] = 0.0f;
+            }
+        }
+    }
 }
 
 void free_transformer(Transformer* t) {
@@ -66,10 +79,10 @@ void free_transformer(Transformer* t) {
 
 void transformer_forward(Tensor* out, Tensor* src_in, Tensor* tgt_in, Transformer* t, int training) {
     // embeddings
-    Tensor* src_embed = create_tensor(src_in->n_dims, src_in->dims, TENSOR_TYPE_FLOAT);
-    embedding_forward(src_embed, src_in, t->src_embedding);
-    Tensor* tgt_embed = create_tensor(tgt_in->n_dims, tgt_in->dims, TENSOR_TYPE_FLOAT);
-    embedding_forward(tgt_embed, tgt_in, t->tgt_embedding);
+    Tensor* src_embed = create_tensor(3, (int[]){src_in->dims[0], src_in->dims[1], t->embed_dim}, TENSOR_TYPE_FLOAT);
+    token_embedding_forward(src_embed, src_in, t->embedding);
+    Tensor* tgt_embed = create_tensor(3, (int[]){tgt_in->dims[0], tgt_in->dims[1], t->embed_dim}, TENSOR_TYPE_FLOAT);
+    token_embedding_forward(tgt_embed, tgt_in, t->embedding);
 
     // encoder
     Tensor* encoder_in = src_embed;
@@ -101,31 +114,46 @@ void transformer_forward(Tensor* out, Tensor* src_in, Tensor* tgt_in, Transforme
     free_tensor(decoder_out);
 }
 
-Value* transformer_forward_ad(Arena* arena, Tensor* src, Tensor* tgt, Transformer* model, int is_training) {
+Value* transformer_forward_ad(Tensor* src, Tensor* tgt, Transformer* model, int is_training) {
     // Note: Embeddings and positional encoding are not part of the graph for now.
-    Tensor* src_embedded = create_tensor(arena, src->n_dims, src->dims, TENSOR_TYPE_FLOAT);
+    int* src_embedded_dims = (int[]){src->dims[0], src->dims[1], model->embed_dim};
+    Tensor* src_embedded = create_tensor(3, src_embedded_dims, TENSOR_TYPE_FLOAT);
     token_embedding_forward(src_embedded, src, model->embedding);
-    // TODO: Positional encoding should be part of the graph if it's learned
-    add(src_embedded, src_embedded, model->pos_encoding);
-    Value* encoder_in_val = create_value(arena, src_embedded, NULL, 0, NULL, NULL);
+
+    Tensor* pos_encoding_broadcast = create_tensor(3, src_embedded_dims, TENSOR_TYPE_FLOAT);
+    size_t src_numel = tensor_numel(src_embedded);
+    size_t pos_numel = tensor_numel(model->pos_encoding);
+    for (size_t i = 0; i < src_numel / pos_numel; i++) {
+        memcpy((char*)pos_encoding_broadcast->data + i * pos_numel * sizeof(float), model->pos_encoding->data, pos_numel * sizeof(float));
+    }
+    add(src_embedded, src_embedded, pos_encoding_broadcast);
+    Value* encoder_in_val = create_value(src_embedded, NULL, 0, NULL, NULL);
 
     Value* encoder_out_val = encoder_in_val;
     for (int i = 0; i < model->n_layers; i++) {
         encoder_out_val = encoder_block_forward_ad(arena, encoder_out_val, model->encoder_layers[i], is_training);
     }
 
-    Tensor* tgt_embedded = create_tensor(arena, tgt->n_dims, tgt->dims, TENSOR_TYPE_FLOAT);
+    int* tgt_embedded_dims = (int[]){tgt->dims[0], tgt->dims[1], model->embed_dim};
+    Tensor* tgt_embedded = create_tensor(3, tgt_embedded_dims, TENSOR_TYPE_FLOAT);
     token_embedding_forward(tgt_embedded, tgt, model->embedding);
-    add(tgt_embedded, tgt_embedded, model->pos_encoding);
-    Value* decoder_in_val = create_value(arena, tgt_embedded, NULL, 0, NULL, NULL);
+
+    Tensor* pos_encoding_broadcast_tgt = create_tensor(3, tgt_embedded_dims, TENSOR_TYPE_FLOAT);
+    size_t tgt_numel = tensor_numel(tgt_embedded);
+    size_t pos_numel_tgt = tensor_numel(model->pos_encoding);
+    for (size_t i = 0; i < tgt_numel / pos_numel_tgt; i++) {
+        memcpy((char*)pos_encoding_broadcast_tgt->data + i * pos_numel_tgt * sizeof(float), model->pos_encoding->data, pos_numel_tgt * sizeof(float));
+    }
+    add(tgt_embedded, tgt_embedded, pos_encoding_broadcast_tgt);
+    Value* decoder_in_val = create_value(tgt_embedded, NULL, 0, NULL, NULL);
 
     Value* decoder_out_val = decoder_in_val;
     for (int i = 0; i < model->n_layers; i++) {
-        decoder_out_val = decoder_block_forward_ad(arena, decoder_out_val, encoder_out_val, model->decoder_layers[i], is_training, model->look_ahead_mask);
+        decoder_out_val = decoder_block_forward_ad(decoder_out_val, encoder_out_val, model->decoder_layers[i], is_training, model->look_ahead_mask);
     }
 
-    Value* out_layer_val = create_value(arena, model->output_layer, NULL, 0, NULL, NULL);
-    Value* logits = matmul_ad(arena, decoder_out_val, out_layer_val);
+    Value* out_layer_val = create_value(model->output_layer, NULL, 0, NULL, NULL);
+    Value* logits = matmul_ad(decoder_out_val, out_layer_val);
 
     return logits;
 }
@@ -150,6 +178,43 @@ int save_transformer(Transformer* t, const char* path) {
     return success;
 }
 
+long get_transformer_param_count(Transformer* t) {
+    long count = 0;
+    count += tensor_numel(t->embedding->weights);
+    for (int i = 0; i < t->n_layers; i++) {
+        // Encoder
+        count += tensor_numel(t->encoder_layers[i]->attention->w_q);
+        count += tensor_numel(t->encoder_layers[i]->attention->w_k);
+        count += tensor_numel(t->encoder_layers[i]->attention->w_v);
+        count += tensor_numel(t->encoder_layers[i]->attention->w_o);
+        count += tensor_numel(t->encoder_layers[i]->ff->w1);
+        count += tensor_numel(t->encoder_layers[i]->ff->w2);
+        count += tensor_numel(t->encoder_layers[i]->ln1->gamma);
+        count += tensor_numel(t->encoder_layers[i]->ln1->beta);
+        count += tensor_numel(t->encoder_layers[i]->ln2->gamma);
+        count += tensor_numel(t->encoder_layers[i]->ln2->beta);
+        // Decoder
+        count += tensor_numel(t->decoder_layers[i]->masked_attention->w_q);
+        count += tensor_numel(t->decoder_layers[i]->masked_attention->w_k);
+        count += tensor_numel(t->decoder_layers[i]->masked_attention->w_v);
+        count += tensor_numel(t->decoder_layers[i]->masked_attention->w_o);
+        count += tensor_numel(t->decoder_layers[i]->cross_attention->w_q);
+        count += tensor_numel(t->decoder_layers[i]->cross_attention->w_k);
+        count += tensor_numel(t->decoder_layers[i]->cross_attention->w_v);
+        count += tensor_numel(t->decoder_layers[i]->cross_attention->w_o);
+        count += tensor_numel(t->decoder_layers[i]->ff->w1);
+        count += tensor_numel(t->decoder_layers[i]->ff->w2);
+        count += tensor_numel(t->decoder_layers[i]->ln1->gamma);
+        count += tensor_numel(t->decoder_layers[i]->ln1->beta);
+        count += tensor_numel(t->decoder_layers[i]->ln2->gamma);
+        count += tensor_numel(t->decoder_layers[i]->ln2->beta);
+        count += tensor_numel(t->decoder_layers[i]->ln3->gamma);
+        count += tensor_numel(t->decoder_layers[i]->ln3->beta);
+    }
+    count += tensor_numel(t->output_layer);
+    return count;
+}
+
 int load_transformer(Transformer* t, const char* path) {
     FILE* fp = fopen(path, "rb");
     if (!fp) return 0;
@@ -166,7 +231,7 @@ int load_transformer(Transformer* t, const char* path) {
 
     if (success) {
         free_tensor(t->output_layer);
-        t->output_layer = load_tensor(fp, NULL);
+        t->output_layer = load_tensor(fp);
         if (!t->output_layer) success = 0;
     }
 

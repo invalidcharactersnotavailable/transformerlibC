@@ -33,24 +33,24 @@ void free_encoder_block(EncoderBlock* block) {
 
 void encoder_block_forward(Tensor* out, Tensor* in, EncoderBlock* block, int training) {
     // self-attention
-    Tensor* attn_out = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* attn_out = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     multihead_attention_forward(attn_out, in, in, in, block->attention, NULL);
     // dropout after attention
-    Tensor* dropout_out1 = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* dropout_out1 = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     dropout_forward(dropout_out1, attn_out, block->dropout, training);
     // first residual connection and layernorm
-    Tensor* res1 = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* res1 = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     add(res1, in, dropout_out1);
-    Tensor* norm1 = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* norm1 = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     layernorm_forward(norm1, res1, block->ln1);
     // feedforward
-    Tensor* ff_out = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* ff_out = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     feedforward_forward(ff_out, norm1, block->ff);
     // dropout after feedforward
-    Tensor* dropout_out2 = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* dropout_out2 = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     dropout_forward(dropout_out2, ff_out, block->dropout, training);
     // second residual connection and layernorm
-    Tensor* res2 = create_tensor(NULL, in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
+    Tensor* res2 = create_tensor(in->n_dims, in->dims, TENSOR_TYPE_FLOAT);
     add(res2, norm1, dropout_out2);
     layernorm_forward(out, res2, block->ln2);
     // free intermediates
@@ -63,16 +63,16 @@ void encoder_block_forward(Tensor* out, Tensor* in, EncoderBlock* block, int tra
     free_tensor(res2);
 }
 
-Value* encoder_block_forward_ad(Arena* arena, Value* in, EncoderBlock* block, int training) {
-    Value* attn_out = multihead_attention_forward_ad(arena, in, in, in, block->attention, NULL);
-    Value* dropout_out1 = dropout_forward_ad(arena, attn_out, block->dropout, training);
-    Value* add1 = add_ad(arena, in, dropout_out1);
-    Value* norm1 = layernorm_forward_ad(arena, add1, block->ln1);
+Value* encoder_block_forward_ad(Value* in, EncoderBlock* block, int training) {
+    Value* attn_out = multihead_attention_forward_ad(in, in, in, block->attention, NULL);
+    Value* dropout_out1 = dropout_forward_ad(attn_out, block->dropout, training);
+    Value* add1 = add_ad(in, dropout_out1);
+    Value* norm1 = layernorm_forward_ad(add1, block->ln1);
 
-    Value* ff_out = feedforward_forward_ad(arena, norm1, block->ff);
-    Value* dropout_out2 = dropout_forward_ad(arena, ff_out, block->dropout, training);
-    Value* add2 = add_ad(arena, norm1, dropout_out2);
-    Value* out = layernorm_forward_ad(arena, add2, block->ln2);
+    Value* ff_out = feedforward_forward_ad(norm1, block->ff);
+    Value* dropout_out2 = dropout_forward_ad(ff_out, block->dropout, training);
+    Value* add2 = add_ad(norm1, dropout_out2);
+    Value* out = layernorm_forward_ad(add2, block->ln2);
     
     return out;
 }

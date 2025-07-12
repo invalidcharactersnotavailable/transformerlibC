@@ -121,32 +121,31 @@ void backward_layernorm(Value* v) {
     }
 }
 
-Value* layernorm_forward_ad(Arena* arena, Value* in, LayerNorm* ln) {
-    Tensor* out_data = create_tensor(arena, in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
+Value* layernorm_forward_ad(Value* in, LayerNorm* ln) {
+    Tensor* out_data = create_tensor(in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
     
-    int feature_size = in->data->dims[in->data->n_dims - 1];
     size_t outer_size = 1;
     for(int i = 0; i < in->data->n_dims - 1; i++) {
         outer_size *= in->data->dims[i];
     }
     
-    Tensor* mean = create_tensor(arena, 1, (int[]){outer_size}, TENSOR_TYPE_FLOAT);
-    Tensor* inv_std = create_tensor(arena, 1, (int[]){outer_size}, TENSOR_TYPE_FLOAT);
+    Tensor* mean = create_tensor(1, (int[]){outer_size}, TENSOR_TYPE_FLOAT);
+    Tensor* inv_std = create_tensor(1, (int[]){outer_size}, TENSOR_TYPE_FLOAT);
 
     layernorm_forward(out_data, in->data, ln);
 
-    LayernormBackwardContext* ctx = (LayernormBackwardContext*)arena_alloc(arena, sizeof(LayernormBackwardContext));
+    LayernormBackwardContext* ctx = (LayernormBackwardContext*)malloc(sizeof(LayernormBackwardContext));
     ctx->x = in->data;
     ctx->gamma = ln->gamma;
     ctx->mean = mean;
     ctx->inv_std = inv_std;
 
-    Value** prev = (Value**)arena_alloc(arena, 3 * sizeof(Value*));
+    Value** prev = (Value**)malloc(3 * sizeof(Value*));
     prev[0] = in;
-    prev[1] = create_value(arena, ln->gamma, NULL, 0, NULL, NULL);
-    prev[2] = create_value(arena, ln->beta, NULL, 0, NULL, NULL);
+    prev[1] = create_value(ln->gamma, NULL, 0, NULL, NULL);
+    prev[2] = create_value(ln->beta, NULL, 0, NULL, NULL);
     
-    return create_value(arena, out_data, prev, 3, ctx, backward_layernorm);
+    return create_value(out_data, prev, 3, ctx, backward_layernorm);
 }
 
 int save_layernorm(LayerNorm* ln, FILE* fp) {
@@ -159,8 +158,8 @@ int load_layernorm(LayerNorm* ln, FILE* fp) {
     free_tensor(ln->gamma);
     free_tensor(ln->beta);
 
-    ln->gamma = load_tensor(fp, NULL);
-    ln->beta = load_tensor(fp, NULL);
+    ln->gamma = load_tensor(fp);
+    ln->beta = load_tensor(fp);
 
     if (!ln->gamma || !ln->beta) {
         return 0;

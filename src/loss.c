@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
-void cross_entropy_loss(float* loss, Tensor* logits, Tensor* targets) {
+float cross_entropy_loss(Tensor* logits, Tensor* targets) {
     // logits: (batch_size, seq_len, vocab_size) or (seq_len, vocab_size) if batch_size==1
     // targets: (batch_size, seq_len) or (seq_len) if batch_size==1
     assert(logits->dtype == TENSOR_TYPE_FLOAT);
@@ -52,14 +53,14 @@ void cross_entropy_loss(float* loss, Tensor* logits, Tensor* targets) {
             loss_val += -log_prob;
         }
     }
-    *loss = loss_val / total;
+    return loss_val / total;
 }
 
 void backward_cross_entropy(Value* v) {
-    CrossEntropyContext* ctx = (CrossEntropyContext*)v->op_context;
     Value* y_val = v->prev[0]; // These are the probabilities after softmax
     Tensor* y = y_val->data;
-    Tensor* t = ctx->targets;
+    Tensor* t = (Tensor*)v->op_context;
+    assert(t);
     Tensor* d_loss = v->grad;
 
     float* y_data = (float*)y->data;
@@ -77,15 +78,17 @@ void backward_cross_entropy(Value* v) {
             for (int v_idx = 0; v_idx < vocab_size; v_idx++) {
                 float y_hat = y_data[b * seq_len * vocab_size + s * vocab_size + v_idx];
                 if (v_idx == target_idx) {
-                    d_y[b * seq_len * vocab_size + s * vocab_size + v_idx] += d_loss_val * (-1.0f / y_hat);
+                    d_y[b * seq_len * vocab_size + s * vocab_size + v_idx] += d_loss_val * (y_hat - 1.0f);
+                } else {
+                    d_y[b * seq_len * vocab_size + s * vocab_size + v_idx] += d_loss_val * y_hat;
                 }
             }
         }
     }
 }
 
-Value* cross_entropy_loss_ad(Arena* arena, Value* logits, Tensor* targets) {
-    Value* probs = softmax_ad(arena, logits);
+Value* cross_entropy_loss_ad(Value* logits, Tensor* targets) {
+    Value* probs = softmax_ad(logits);
 
     int batch_size = probs->data->dims[0];
     int seq_len = probs->data->dims[1];
@@ -104,14 +107,12 @@ Value* cross_entropy_loss_ad(Arena* arena, Value* logits, Tensor* targets) {
     }
     loss_val /= (batch_size * seq_len);
 
-    Tensor* loss_tensor = create_tensor(arena, 1, (int[]){1}, TENSOR_TYPE_FLOAT);
+    Tensor* loss_tensor = create_tensor(1, (int[]){1}, TENSOR_TYPE_FLOAT);
     ((float*)loss_tensor->data)[0] = loss_val;
     
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     prev[0] = probs;
     
-    CrossEntropyContext* ctx = (CrossEntropyContext*)arena_alloc(arena, sizeof(CrossEntropyContext));
-    ctx->targets = targets;
-
-    return create_value(arena, loss_tensor, prev, 1, ctx, backward_cross_entropy);
-} 
+    Value* loss_val_val = create_value(loss_tensor, prev, 1, targets, backward_cross_entropy);
+    return loss_val_val;
+}

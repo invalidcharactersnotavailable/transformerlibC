@@ -32,12 +32,11 @@ void dropout_forward(Tensor* out, Tensor* in, Dropout* d, int training);
 
 /**
  * dropout_forward_ad - autodiff forward pass for dropout
- * @arena: memory arena
  * @in: input value
  * @d: dropout layer
  * @training: training mode flag
  * returns: autodiff value
  */
-Value* dropout_forward_ad(Arena* arena, Value* in, Dropout* d, int training);
+Value* dropout_forward_ad(Value* in, Dropout* d, int training);
 
 #endif // DROPOUT_H 

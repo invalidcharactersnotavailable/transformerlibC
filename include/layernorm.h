@@ -32,12 +32,11 @@ void layernorm_forward(Tensor* out, Tensor* in, LayerNorm* ln);
 
 /**
  * layernorm_forward_ad - autodiff forward pass for layer normalization
- * @arena: memory arena
  * @in: input value
  * @ln: layernorm block
  * returns: autodiff value
  */
-Value* layernorm_forward_ad(Arena* arena, Value* in, LayerNorm* ln);
+Value* layernorm_forward_ad(Value* in, LayerNorm* ln);
 
 /**
  * save_layernorm - write layernorm block to file

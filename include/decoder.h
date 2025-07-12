@@ -49,7 +49,6 @@ void decoder_block_forward(Tensor* out, Tensor* tgt_in, Tensor* encoder_out, Dec
 
 /**
  * decoder_block_forward_ad - autodiff forward pass for decoder block
- * @arena: memory arena
  * @tgt: target input value
  * @encoder_out: encoder output value
  * @block: decoder block
@@ -57,7 +56,7 @@ void decoder_block_forward(Tensor* out, Tensor* tgt_in, Tensor* encoder_out, Dec
  * @look_ahead_mask: look-ahead mask tensor
  * returns: autodiff value
  */
-Value* decoder_block_forward_ad(Arena* arena, Value* tgt, Value* encoder_out, DecoderBlock* block, int training, Tensor* look_ahead_mask);
+Value* decoder_block_forward_ad(Value* tgt, Value* encoder_out, DecoderBlock* block, int training, Tensor* look_ahead_mask);
 
 /**
  * save_decoder_block - write decoder block to file

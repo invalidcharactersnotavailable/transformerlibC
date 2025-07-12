@@ -11,10 +11,8 @@ static size_t count_params(Transformer* model) {
     size_t count = 0;
     count++; // embedding
     for (int i = 0; i < model->n_layers; i++) {
-        EncoderBlock* enc = model->encoder_layers[i];
         count += 12; // encoder params
-        DecoderBlock* dec = model->decoder_layers[i];
-        count += 16; // decoder params
+        count += 18; // decoder params
     }
     count++; // output layer
     return count;
@@ -124,7 +122,7 @@ void optimizer_enable_mixed_precision(Optimizer* opt, int enable) {
 void free_optimizer(Optimizer* opt) {
     if (!opt) return;
     if (opt->adam) {
-        for (size_t i = 0; i < opt->num_params; i++) {
+        for (size_t i = 0; i < (size_t)opt->num_params; i++) {
             free(opt->adam->m[i]);
             free(opt->adam->v[i]);
         }
@@ -141,7 +139,7 @@ void optimizer_step(Optimizer* opt) {
     if (!opt) return;
     float lr = opt->learning_rate;
     if (opt->type == OPTIMIZER_SGD) {
-        for (size_t i = 0; i < opt->num_params; i++) {
+        for (size_t i = 0; i < (size_t)opt->num_params; i++) {
             Tensor* param = opt->params[i];
             if (!param || !param->data || !param->grad) continue;
             float* p = (float*)param->data;
@@ -166,7 +164,7 @@ void optimizer_step(Optimizer* opt) {
         opt->adam->t++;
         float beta1_pow = powf(beta1, opt->adam->t);
         float beta2_pow = powf(beta2, opt->adam->t);
-        for (size_t i = 0; i < opt->num_params; i++) {
+        for (size_t i = 0; i < (size_t)opt->num_params; i++) {
             Tensor* param = opt->params[i];
             if (!param || !param->data || !param->grad) continue;
             float* p = (float*)param->data;
@@ -202,7 +200,7 @@ void optimizer_step(Optimizer* opt) {
 // zero all gradients in the optimizer
 void zero_grad(Optimizer* opt) {
     if (!opt) return;
-    for (size_t i = 0; i < opt->num_params; i++) {
+    for (size_t i = 0; i < (size_t)opt->num_params; i++) {
         Tensor* param = opt->params[i];
         if (!param || !param->grad) continue;
         float* g = (float*)param->grad;

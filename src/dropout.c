@@ -71,13 +71,13 @@ void backward_dropout(Value* v) {
 }
 
 // forward pass for dropout in autodiff
-Value* dropout_forward_ad(Arena* arena, Value* in, Dropout* d, int training) {
-    assert(arena && in && d);
+Value* dropout_forward_ad(Value* in, Dropout* d, int training) {
+    assert(in && d);
     if (!training || d->rate == 0) {
         return in;
     }
-    Tensor* out_data = create_tensor(arena, in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
-    Tensor* mask = create_tensor(arena, in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
+    Tensor* out_data = create_tensor(in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
+    Tensor* mask = create_tensor(in->data->n_dims, in->data->dims, TENSOR_TYPE_FLOAT);
     if (!out_data || !mask) return NULL;
     float scale = 1.0f / (1.0f - d->rate);
     float* in_data = (float*)in->data->data;
@@ -94,12 +94,12 @@ Value* dropout_forward_ad(Arena* arena, Value* in, Dropout* d, int training) {
             out_data_p[i] = 0.0f;
         }
     }
-    DropoutContext* ctx = (DropoutContext*)arena_alloc(arena, sizeof(DropoutContext));
+    DropoutContext* ctx = (DropoutContext*)malloc(sizeof(DropoutContext));
     if (!ctx) return NULL;
     ctx->mask = mask;
     ctx->rate = d->rate;
-    Value** prev = (Value**)arena_alloc(arena, 1 * sizeof(Value*));
+    Value** prev = (Value**)malloc(sizeof(Value*));
     if (!prev) return NULL;
     prev[0] = in;
-    return create_value(arena, out_data, prev, 1, ctx, backward_dropout);
+    return create_value(out_data, prev, 1, ctx, backward_dropout);
 } 
