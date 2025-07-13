@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <assert.h>
-#include "memory.h"
 #include <stdint.h>
 
 // float16 conversion helpers

@@ -1,6 +1,5 @@
 #include "autodiff.h"
 #include "tensor.h"
-#include "memory.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -413,7 +412,6 @@ void backward(Value* v) {
     }
     
     for (int i = count - 1; i >= 0; i--) {
-        fprintf(stderr, "node %d, grad: %p\n", i, sorted_nodes[i]->grad);
         if (sorted_nodes[i]->_backward) {
             sorted_nodes[i]->_backward(sorted_nodes[i]);
         }

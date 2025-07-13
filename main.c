@@ -5,7 +5,6 @@
 #include "optimizer.h"
 #include "loss.h"
 #include <string.h>
-#include "memory.h"
 #include "autodiff.h"
 #include <stdint.h>
 #include <unistd.h>
@@ -165,8 +164,8 @@ int main(int argc, char** argv) {
         int batch_count = 0;
         for (int batch = 0; batch < (dataset ? dataset->num_lines : 1); batch += batch_size) {
             int this_batch = dataset ? (batch + batch_size <= dataset->num_lines ? batch_size : dataset->num_lines - batch) : 1;
-            Tensor* src_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
-            Tensor* tgt_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+            Tensor* src_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+            Tensor* tgt_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
             if (!src_in || !tgt_in) {
                 LOG_ERR("failed to allocate input tensors");
                 break;
@@ -178,9 +177,9 @@ int main(int argc, char** argv) {
                 memcpy((int*)src_in->data + b * seq_len, token_ids, num_tokens * sizeof(int));
                 memcpy((int*)tgt_in->data + b * seq_len, token_ids, num_tokens * sizeof(int));
             }
-            Value* logits = transformer_forward_ad(training_arena, src_in, tgt_in, model, 1);
+            Value* logits = transformer_forward_ad(src_in, tgt_in, model, 1);
             if (!logits) { LOG_ERR("forward pass failed"); break; }
-            Value* loss = cross_entropy_loss_ad(training_arena, logits, tgt_in);
+            Value* loss = cross_entropy_loss_ad(logits, tgt_in);
             if (!loss) { LOG_ERR("loss computation failed"); break; }
             LOG_INFO("Epoch %d Batch %d Loss: %f", epoch, batch / batch_size, ((float*)loss->data->data)[0]);
             backward(loss);
@@ -190,7 +189,6 @@ int main(int argc, char** argv) {
                 zero_grad(optimizer);
             }
             
-            arena_reset(training_arena);
             batch_count++;
         }
     }
@@ -222,8 +220,8 @@ int main(int argc, char** argv) {
             int batch_count = 0;
             for (int batch = 0; batch < train_ds->num_lines; batch += batch_size) {
                 int this_batch = (batch + batch_size <= train_ds->num_lines) ? batch_size : train_ds->num_lines - batch;
-                Tensor* src_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
-                Tensor* tgt_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+                Tensor* src_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+                Tensor* tgt_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
                 if (!src_in || !tgt_in) {
                     LOG_ERR("failed to allocate input tensors");
                     break;
@@ -260,7 +258,6 @@ int main(int argc, char** argv) {
                     zero_grad(optimizer);
                 }
 
-                arena_reset(training_arena);
                 batch_count++;
             }
 
@@ -269,8 +266,8 @@ int main(int argc, char** argv) {
             int val_batches = 0;
             for (int batch = 0; batch < val_ds->num_lines; batch += batch_size) {
                 int this_batch = (batch + batch_size <= val_ds->num_lines) ? batch_size : val_ds->num_lines - batch;
-                Tensor* src_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
-                Tensor* tgt_in = create_tensor(training_arena, 2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+                Tensor* src_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
+                Tensor* tgt_in = create_tensor(2, (int[]){this_batch, seq_len}, TENSOR_TYPE_INT);
                 if (!src_in || !tgt_in) {
                     LOG_ERR("failed to allocate validation input tensors");
                     break;
@@ -309,7 +306,6 @@ int main(int argc, char** argv) {
 
     free_optimizer(optimizer);
     free_transformer(model);
-    destroy_arena(training_arena);
     LOG_INFO("Training complete.");
     return 0;
 }
