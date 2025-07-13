@@ -20,7 +20,7 @@ void create_positional_encoding(Tensor* pe, int max_seq_len, int embed_dim) {
 
 Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, int embed_dim, int n_heads, int ff_hidden_dim) {
     Transformer* t = (Transformer*)malloc(sizeof(Transformer));
-    if (!t) return NULL;
+    if (!t) { fprintf(stderr, "[ERR] malloc failed for Transformer\n"); return NULL; }
 
     t->n_layers = n_layers;
     t->vocab_size = vocab_size;
@@ -28,26 +28,47 @@ Transformer* create_transformer(int n_layers, int vocab_size, int max_seq_len, i
     t->embed_dim = embed_dim;
 
     t->embedding = create_token_embedding(vocab_size, embed_dim);
+    if (!t->embedding) { fprintf(stderr, "[ERR] create_token_embedding failed\n"); free(t); return NULL; }
 
     int pos_dims[] = {max_seq_len, embed_dim};
     t->pos_encoding = create_tensor(2, pos_dims, TENSOR_TYPE_FLOAT);
+    if (!t->pos_encoding) { fprintf(stderr, "[ERR] create_tensor failed for pos_encoding\n"); free_token_embedding(t->embedding); free(t); return NULL; }
     create_positional_encoding(t->pos_encoding, max_seq_len, embed_dim);
 
     t->encoder_layers = (EncoderBlock**)malloc(n_layers * sizeof(EncoderBlock*));
+    if (!t->encoder_layers) { fprintf(stderr, "[ERR] malloc failed for encoder_layers\n"); free_tensor(t->pos_encoding); free_token_embedding(t->embedding); free(t); return NULL; }
     t->decoder_layers = (DecoderBlock**)malloc(n_layers * sizeof(DecoderBlock*));
+    if (!t->decoder_layers) { fprintf(stderr, "[ERR] malloc failed for decoder_layers\n"); free(t->encoder_layers); free_tensor(t->pos_encoding); free_token_embedding(t->embedding); free(t); return NULL; }
+    
     for (int i = 0; i < n_layers; i++) {
         t->encoder_layers[i] = create_encoder_block(embed_dim, n_heads, ff_hidden_dim);
+        if (!t->encoder_layers[i]) { fprintf(stderr, "[ERR] create_encoder_block failed for layer %d\n", i); goto cleanup; }
         t->decoder_layers[i] = create_decoder_block(embed_dim, n_heads, ff_hidden_dim);
+        if (!t->decoder_layers[i]) { fprintf(stderr, "[ERR] create_decoder_block failed for layer %d\n", i); goto cleanup; }
     }
     
     int out_dims[] = {embed_dim, vocab_size};
     t->output_layer = create_tensor(2, out_dims, TENSOR_TYPE_FLOAT);
+    if (!t->output_layer) { fprintf(stderr, "[ERR] create_tensor failed for output_layer\n"); goto cleanup; }
 
     int mask_dims[] = {max_seq_len, max_seq_len};
     t->look_ahead_mask = create_tensor(2, mask_dims, TENSOR_TYPE_FLOAT);
+    if (!t->look_ahead_mask) { fprintf(stderr, "[ERR] create_tensor failed for look_ahead_mask\n"); free_tensor(t->output_layer); goto cleanup; }
     create_look_ahead_mask(t->look_ahead_mask, max_seq_len);
 
     return t;
+
+cleanup:
+    for (int j = 0; j < i; j++) {
+        if (t->encoder_layers[j]) free_encoder_block(t->encoder_layers[j]);
+        if (t->decoder_layers[j]) free_decoder_block(t->decoder_layers[j]);
+    }
+    free(t->encoder_layers);
+    free(t->decoder_layers);
+    free_tensor(t->pos_encoding);
+    free_token_embedding(t->embedding);
+    free(t);
+    return NULL;
 }
 
 void create_look_ahead_mask(Tensor* mask, int seq_len) {
@@ -131,7 +152,7 @@ Value* transformer_forward_ad(Tensor* src, Tensor* tgt, Transformer* model, int 
 
     Value* encoder_out_val = encoder_in_val;
     for (int i = 0; i < model->n_layers; i++) {
-        encoder_out_val = encoder_block_forward_ad(arena, encoder_out_val, model->encoder_layers[i], is_training);
+        encoder_out_val = encoder_block_forward_ad(encoder_out_val, model->encoder_layers[i], is_training);
     }
 
     int* tgt_embedded_dims = (int[]){tgt->dims[0], tgt->dims[1], model->embed_dim};

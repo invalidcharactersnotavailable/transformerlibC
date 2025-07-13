@@ -15,8 +15,7 @@ make
 ## configuration
 
 - set hyperparameters in `main.c` (layers, embed_dim, etc)
-- set memory arena size with `ARENA_SIZE_MB` env var (e.g. `export ARENA_SIZE_MB=4096`)
-- for 100m+ param models, use large arena and enough RAM
+- for 100m+ param models, ensure enough RAM is available
 
 ## scaling
 

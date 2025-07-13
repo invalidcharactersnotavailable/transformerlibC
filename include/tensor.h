@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "memory.h"
 
 #ifdef USE_BLAS
 #include <cblas.h>
