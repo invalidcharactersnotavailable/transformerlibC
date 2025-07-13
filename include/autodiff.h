@@ -2,7 +2,6 @@
 #define AUTODIFF_H
 
 #include "tensor.h"
-#include "memory.h"
 
 // Forward declaration
 struct Value;

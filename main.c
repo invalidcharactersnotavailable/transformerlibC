@@ -12,7 +12,6 @@
 #include "tokenizer.h"
 #include "optimizer.h"
 #include "loss.h"
-#include "memory.h"
 #include "autodiff.h"
 #include "dataset.h"
 #include "inference.h"
@@ -491,16 +490,6 @@ void run_training(const Config* config, Transformer* model, Dataset* dataset, To
         
         float epoch_loss = 0.0f;
         int batch_count = 0;
-        
-        for (int batch_start = 0; batch_start < dataset_size && !should_stop; 
-             batch_start += config->batch_size) {
-            
-            // Create batch
-            Batch* batch = create_batch(dataset, batch_start, config->batch_size, 
-                                       config->seq_len, config->vocab_size);
-            if (!batch) {
-                LOG_ERR("Failed to create batch");
-                continue;
             }
             
             // Create input tensors
@@ -512,36 +501,6 @@ void run_training(const Config* config, Transformer* model, Dataset* dataset, To
                 free_batch(batch);
                 continue;
             }
-            
-            // Copy batch data
-            memcpy(src_in->data, batch->input_ids, batch->actual_batch_size * config->seq_len * sizeof(int));
-            memcpy(tgt_in->data, batch->target_ids, batch->actual_batch_size * config->seq_len * sizeof(int));
-            
-            // Forward pass
-            Value* logits = transformer_forward_ad(training_arena, src_in, tgt_in, model, 1);
-            if (!logits) {
-                LOG_ERR("Forward pass failed");
-                free_tensor(src_in);
-                free_tensor(tgt_in);
-                free_batch(batch);
-                continue;
-            }
-            
-            // Compute loss
-            Value* loss = cross_entropy_loss_ad(training_arena, logits, tgt_in);
-            if (!loss) {
-                LOG_ERR("Loss computation failed");
-                free_tensor(src_in);
-                free_tensor(tgt_in);
-                free_batch(batch);
-                free_graph(logits);
-                continue;
-            }
-            
-            float current_loss = ((float*)loss->data->data)[0];
-            epoch_loss += current_loss;
-            
-            // Backward pass
             backward(loss);
             
             // Optimizer step
@@ -549,20 +508,7 @@ void run_training(const Config* config, Transformer* model, Dataset* dataset, To
                 optimizer_step(optimizer);
                 zero_grad(optimizer);
             }
-            
-            if (config->verbose || batch_count % 100 == 0) {
-                LOG_INFO("Epoch %d, Batch %d/%d, Loss: %.4f", 
-                        epoch + 1, batch_count + 1, total_batches, current_loss);
-            }
-            
-            // Cleanup
-            free_tensor(src_in);
-            free_tensor(tgt_in);
-            free_batch(batch);
-            free_graph(loss);
-            
-            // Reset arena for next batch
-            arena_reset(training_arena);
+           
             batch_count++;
         }
         
@@ -589,169 +535,6 @@ void run_training(const Config* config, Transformer* model, Dataset* dataset, To
             LOG_ERR("Failed to save final model to %s", config->save_path);
         }
     }
-    
-    // Cleanup
-    destroy_arena(training_arena);
-    free_optimizer(optimizer);
-}
 
-void run_inference(const Config* config, Transformer* model, Tokenizer* tokenizer) {
-    LOG_INFO("Starting inference...");
-    
-    // Create inference context
-    InferenceContext* ctx = create_inference_context(model, tokenizer);
-    if (!ctx) {
-        LOG_ERR("Failed to create inference context");
-        return;
-    }
-    
-    // Set generation parameters
-    ctx->config.max_length = config->max_length;
-    ctx->config.temperature = config->temperature;
-    ctx->config.top_k = config->top_k;
-    
-    if (config->verbose) {
-        print_generation_config(&ctx->config);
-    }
-    
-    if (config->interactive_mode) {
-        // Interactive mode
-        char prompt[1024];
-        printf("Enter prompts (type 'quit' to exit):\n");
-        
-        while (1) {
-            printf("> ");
-            if (!fgets(prompt, sizeof(prompt), stdin)) break;
-            
-            // Remove newline
-            prompt[strcspn(prompt, "\n")] = '\0';
-            
-            if (strcmp(prompt, "quit") == 0) break;
-            if (strlen(prompt) == 0) continue;
-            
-            char* generated = generate_text_interactive(ctx, prompt);
-            if (generated) {
-                printf("\nGenerated: %s\n\n", generated);
-                free(generated);
-            }
-        }
-    } else {
-        // Single generation
-        const char* prompt_text = config->prompt[0] != '\0' ? config->prompt : "Hello world";
-        char* generated = generate_text(ctx, prompt_text);
-        
-        if (generated) {
-            printf("Prompt: %s\n", prompt_text);
-            printf("Generated: %s\n", generated);
-            
-            if (config->verbose) {
-                log_inference_stats(ctx, prompt_text, generated);
-            }
-            
-            free(generated);
-        } else {
-            LOG_ERR("Failed to generate text");
-        }
-    }
-    
-    free_inference_context(ctx);
-}
-
-int main(int argc, char** argv) {
-    // Set up signal handling
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-    
-    // Parse configuration
-    Config config;
-    set_default_config(&config);
-    
-    if (parse_arguments(argc, argv, &config)) {
-        return 1;
-    }
-    
-    if (!validate_config(&config)) {
-        return 1;
-    }
-    
-    // Set random seed
-    srand(config.seed);
-    
-    // Set up logging
-    if (config.verbose) {
-        LOG_INFO("Starting transformer training/inference");
-        LOG_INFO("Configuration: %d layers, %d dim, %d heads, vocab_size=%d", 
-                config.n_layers, config.embed_dim, config.n_heads, config.vocab_size);
-    }
-    
-    // Create model
-    Transformer* model = create_transformer(config.n_layers, config.vocab_size, 
-                                           config.max_seq_len, config.embed_dim, 
-                                           config.n_heads, config.ff_hidden_dim);
-    if (!model) {
-        LOG_ERR("Failed to create transformer model");
-        return 1;
-    }
-    
-    LOG_INFO("Created transformer model with %ld parameters", get_transformer_param_count(model));
-    
-    // Load model if specified
-    if (config.load_path[0] != '\0') {
-        LOG_INFO("Loading model from %s", config.load_path);
-        if (!load_transformer(model, config.load_path)) {
-            LOG_ERR("Failed to load model from %s", config.load_path);
-            free_transformer(model);
-            return 1;
-        }
-        LOG_INFO("Successfully loaded model");
-    }
-    
-    // Run test mode
-    if (config.test_mode) {
-        test_transformer(model);
-        free_transformer(model);
-        return 0;
-    }
-    
-    // Run inference mode
-    if (config.inference_mode) {
-        // Create a simple tokenizer for inference
-        Tokenizer* tokenizer = create_tokenizer(config.vocab_size);
-        if (!tokenizer) {
-            LOG_ERR("Failed to create tokenizer for inference");
-            free_transformer(model);
-            return 1;
-        }
-        
-        run_inference(&config, model, tokenizer);
-        
-        free_tokenizer(tokenizer);
-        free_transformer(model);
-        return 0;
-    }
-    
-    // Training mode
-    Dataset* dataset = load_training_data(&config);
-    if (!dataset) {
-        free_transformer(model);
-        return 1;
-    }
-    
-    Tokenizer* tokenizer = create_and_build_tokenizer(&config, dataset);
-    if (!tokenizer) {
-        free_dataset(dataset);
-        free_transformer(model);
-        return 1;
-    }
-    
-    // Run training
-    run_training(&config, model, dataset, tokenizer);
-    
-    // Cleanup
-    free_tokenizer(tokenizer);
-    free_dataset(dataset);
-    free_transformer(model);
-    
-    LOG_INFO("Completed successfully");
     return 0;
 }
