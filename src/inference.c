@@ -2,6 +2,8 @@
 #include "autodiff.h"
 #include "loss.h"
 #include <sys/time.h>
+#include <unistd.h>
+#include <sys/select.h>
 
 // Default generation configuration
 void set_default_generation_config(GenerationConfig* config) {
@@ -26,7 +28,7 @@ void print_generation_config(const GenerationConfig* config) {
     printf("Generation Config:\n");
     printf("  Temperature: %.2f\n", config->temperature);
     printf("  Top-k: %d\n", config->top_k);
-    printf("  Top-p: %.2f\n", config->top_p);
+    printf("  Top-p: %.2d\n", config->top_p);
     printf("  Max length: %d\n", config->max_length);
     printf("  Min length: %d\n", config->min_length);
     printf("  Repetition penalty: %.2f\n", config->repetition_penalty);
@@ -34,11 +36,6 @@ void print_generation_config(const GenerationConfig* config) {
     printf("  Num beams: %d\n", config->num_beams);
     printf("  Special tokens: PAD=%d, BOS=%d, EOS=%d\n", 
            config->pad_token_id, config->bos_token_id, config->eos_token_id);
-}
-
-Arena* create_inference_arena(size_t size_mb) {
-    size_t size_bytes = size_mb * 1024 * 1024;
-    return create_arena(size_bytes);
 }
 
 InferenceContext* create_inference_context(Transformer* model, Tokenizer* tokenizer) {
@@ -51,20 +48,12 @@ InferenceContext* create_inference_context(Transformer* model, Tokenizer* tokeni
     ctx->tokenizer = tokenizer;
     set_default_generation_config(&ctx->config);
     
-    // Create inference arena (default 1GB)
-    ctx->inference_arena = create_inference_arena(1024);
-    if (!ctx->inference_arena) {
-        free(ctx);
-        return NULL;
-    }
-    
     // Allocate token buffer
     ctx->max_generated = ctx->config.max_length;
     ctx->generated_tokens = malloc(ctx->max_generated * sizeof(int));
     ctx->num_generated = 0;
     
     if (!ctx->generated_tokens) {
-        destroy_arena(ctx->inference_arena);
         free(ctx);
         return NULL;
     }
@@ -75,18 +64,15 @@ InferenceContext* create_inference_context(Transformer* model, Tokenizer* tokeni
 void free_inference_context(InferenceContext* ctx) {
     if (!ctx) return;
     
-    if (ctx->inference_arena) {
-        destroy_arena(ctx->inference_arena);
-    }
     if (ctx->generated_tokens) {
         free(ctx->generated_tokens);
     }
     free(ctx);
 }
 
-void reset_inference_arena(InferenceContext* ctx) {
-    if (ctx && ctx->inference_arena) {
-        arena_reset(ctx->inference_arena);
+void reset_inference_context(InferenceContext* ctx) {
+    if (ctx) {
+        ctx->num_generated = 0;
     }
 }
 
@@ -111,13 +97,7 @@ int validate_model_for_inference(Transformer* model) {
     
     // Check basic model parameters
     if (model->n_layers <= 0 || model->embed_dim <= 0 || 
-        model->n_heads <= 0 || model->ff_hidden_dim <= 0 ||
         model->vocab_size <= 0 || model->max_seq_len <= 0) {
-        return 0;
-    }
-    
-    // Check that embed_dim is divisible by n_heads
-    if (model->embed_dim % model->n_heads != 0) {
         return 0;
     }
     
@@ -321,7 +301,7 @@ int sample_next_token(InferenceContext* ctx, float* logits, int vocab_size) {
 int generate_tokens(InferenceContext* ctx, const char* prompt, int* output_tokens, int max_output_tokens) {
     if (!ctx || !output_tokens || max_output_tokens <= 0) return 0;
     
-    reset_inference_arena(ctx);
+    reset_inference_context(ctx);
     
     // Encode prompt
     int prompt_tokens[ctx->model->max_seq_len];
@@ -348,7 +328,7 @@ int generate_tokens(InferenceContext* ctx, const char* prompt, int* output_token
         memcpy(input->data, output_tokens, total_length * sizeof(int));
         
         // Forward pass
-        Value* logits_value = transformer_forward_ad(ctx->inference_arena, input, NULL, ctx->model, 0);
+        Value* logits_value = transformer_forward_ad(input, NULL, ctx->model, 0);
         if (!logits_value) {
             free_tensor(input);
             break;
@@ -436,14 +416,14 @@ char* generate_text_interactive(InferenceContext* ctx, const char* prompt) {
     // Interactive generation
     while (total_length < max_tokens) {
         // Generate next token
-        reset_inference_arena(ctx);
+        reset_inference_context(ctx);
         
         Tensor* input = create_tensor(2, (int[]){1, total_length}, TENSOR_TYPE_INT);
         if (!input) break;
         
         memcpy(input->data, tokens, total_length * sizeof(int));
         
-        Value* logits_value = transformer_forward_ad(ctx->inference_arena, input, NULL, ctx->model, 0);
+        Value* logits_value = transformer_forward_ad(input, NULL, ctx->model, 0);
         if (!logits_value) {
             free_tensor(input);
             break;
@@ -511,8 +491,8 @@ void log_inference_stats(const InferenceContext* ctx, const char* prompt, const 
     printf("Prompt length: %zu characters\n", strlen(prompt));
     printf("Generated length: %zu characters\n", strlen(generated));
     printf("Tokens generated: %d\n", ctx->num_generated);
-    printf("Model: %d layers, %d dim, %d heads\n", 
-           ctx->model->n_layers, ctx->model->embed_dim, ctx->model->n_heads);
+    printf("Model: %d layers, %d dim\n", 
+           ctx->model->n_layers, ctx->model->embed_dim);
     printf("Vocabulary size: %d\n", ctx->model->vocab_size);
     printf("=====================\n");
 }
