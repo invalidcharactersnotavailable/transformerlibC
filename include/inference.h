@@ -30,7 +30,6 @@ typedef struct {
     Transformer* model;
     Tokenizer* tokenizer;
     GenerationConfig config;
-    Arena* inference_arena;
     int* generated_tokens;
     int num_generated;
     int max_generated;
@@ -63,8 +62,7 @@ float* compute_attention_mask(int seq_len, int max_seq_len);
 int* create_position_ids(int seq_len);
 
 // Memory management for inference
-Arena* create_inference_arena(size_t size_mb);
-void reset_inference_arena(InferenceContext* ctx);
+void reset_inference_context(InferenceContext* ctx);
 
 // Logging and debugging
 void log_inference_stats(const InferenceContext* ctx, const char* prompt, const char* generated);
