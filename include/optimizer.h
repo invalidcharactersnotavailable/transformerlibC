@@ -58,6 +58,13 @@ void optimizer_step(Optimizer* opt);
 void zero_grad(Optimizer* opt);
 
 /**
+ * optimizer_set_type - set the optimizer type
+ * @opt: pointer to optimizer
+ * @type: optimizer type (OPTIMIZER_SGD or OPTIMIZER_ADAM)
+ */
+void optimizer_set_type(Optimizer* opt, OptimizerType type);
+
+/**
  * gather_params - gather all parameters from a model
  * @model: transformer model
  * @params: array to fill with parameter pointers
