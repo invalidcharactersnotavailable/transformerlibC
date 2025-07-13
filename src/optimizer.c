@@ -212,4 +212,10 @@ void zero_grad(Optimizer* opt) {
             memset(g, 0, sz * sizeof(float));
         }
     }
+}
+
+// set optimizer type
+void optimizer_set_type(Optimizer* opt, OptimizerType type) {
+    if (!opt) return;
+    opt->type = type;
 } 
