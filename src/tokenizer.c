@@ -2,6 +2,26 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <string.h>
+#include <stdlib.h>
+
+// Define DT_REG if not available
+#ifndef DT_REG
+#define DT_REG 8
+#endif
+
+// Define strdup if not available (for older systems)
+#ifndef _GNU_SOURCE
+char* strdup(const char* s) {
+    if (!s) return NULL;
+    size_t len = strlen(s) + 1;
+    char* dup = malloc(len);
+    if (dup) {
+        memcpy(dup, s, len);
+    }
+    return dup;
+}
+#endif
 
 // Comparison function for qsort
 static int compare_vocab_entries(const void* a, const void* b) {
@@ -15,15 +35,7 @@ static int compare_vocab_entries(const void* a, const void* b) {
     return strcmp(va->token, vb->token);
 }
 
-// Hash function for token lookup
-static unsigned int hash_token(const char* token) {
-    unsigned int hash = 5381;
-    int c;
-    while ((c = *token++)) {
-        hash = ((hash << 5) + hash) + c;
-    }
-    return hash;
-}
+
 
 Tokenizer* create_tokenizer(int max_vocab_size) {
     Tokenizer* tokenizer = malloc(sizeof(Tokenizer));
